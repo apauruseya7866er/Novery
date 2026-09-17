@@ -171,12 +171,14 @@ fun StorageScreen(
     // Auto-initialize restore options when metadata is loaded
     LaunchedEffect(backupMetadata) {
         backupMetadata?.let { meta ->
-            restoreOptions = RestoreOptions(
-                restoreLibrary = meta.libraryCount > 0,
-                restoreBookmarks = meta.bookmarkCount > 0,
-                restoreHistory = meta.historyCount > 0,
-                restoreStatistics = meta.hasStatistics,
-                restoreSettings = meta.hasSettings,
+                restoreOptions = RestoreOptions(
+                    restoreLibrary = meta.libraryCount > 0,
+                    restoreBookmarks = meta.bookmarkCount > 0,
+                    restoreHistory = meta.historyCount > 0,
+                    restoreStatistics = meta.hasStatistics,
+                    restoreSettings = meta.hasSettings,
+                    restoreWorks = meta.worksCount > 0,
+                    restoreTextFilters = meta.textFiltersCount > 0,
                 mergeWithExisting = true
             )
         }
@@ -1297,7 +1299,8 @@ private fun RestoreOptionsDialog(
     }
 
     val hasAnySelected = options.restoreLibrary || options.restoreBookmarks ||
-            options.restoreHistory || options.restoreStatistics || options.restoreSettings
+            options.restoreHistory || options.restoreStatistics || options.restoreSettings ||
+            options.restoreWorks || options.restoreTextFilters
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1350,6 +1353,42 @@ private fun RestoreOptionsDialog(
                             InfoRow("Version", metadata.appVersion)
                         }
                         InfoRow("Device", metadata.deviceInfo)
+                        // Slice-06.1: integrity badge.
+                        if (!metadata.isQuickNovelBackup) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Integrity ",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Surface(
+                                    color = if (metadata.checksumValid == true) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHigh
+                                    },
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = if (metadata.checksumValid == true) {
+                                            "Verified"
+                                        } else {
+                                            "Legacy (unverified)"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (metadata.checksumValid == true) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.padding(
+                                            horizontal = 6.dp,
+                                            vertical = 2.dp
+                                        )
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1402,7 +1441,9 @@ private fun RestoreOptionsDialog(
                                         restoreBookmarks = metadata.bookmarkCount > 0,
                                         restoreHistory = metadata.historyCount > 0,
                                         restoreStatistics = metadata.hasStatistics,
-                                        restoreSettings = metadata.hasSettings
+                                        restoreSettings = metadata.hasSettings,
+                                        restoreWorks = metadata.worksCount > 0,
+                                        restoreTextFilters = metadata.textFiltersCount > 0
                                     )
                                 )
                             },
@@ -1422,7 +1463,9 @@ private fun RestoreOptionsDialog(
                                         restoreBookmarks = false,
                                         restoreHistory = false,
                                         restoreStatistics = false,
-                                        restoreSettings = false
+                                        restoreSettings = false,
+                                        restoreWorks = false,
+                                        restoreTextFilters = false
                                     )
                                 )
                             },
@@ -1485,6 +1528,22 @@ private fun RestoreOptionsDialog(
                         enabled = metadata.hasSettings,
                         onCheckedChange = {
                             onOptionsChange(options.copy(restoreSettings = it))
+                        }
+                    )
+                    RestoreOptionRow(
+                        label = "Source links (${metadata.worksCount} works)",
+                        checked = options.restoreWorks && metadata.worksCount > 0,
+                        enabled = metadata.worksCount > 0,
+                        onCheckedChange = {
+                            onOptionsChange(options.copy(restoreWorks = it))
+                        }
+                    )
+                    RestoreOptionRow(
+                        label = "Text filters (${metadata.textFiltersCount})",
+                        checked = options.restoreTextFilters && metadata.textFiltersCount > 0,
+                        enabled = metadata.textFiltersCount > 0,
+                        onCheckedChange = {
+                            onOptionsChange(options.copy(restoreTextFilters = it))
                         }
                     )
                 }
