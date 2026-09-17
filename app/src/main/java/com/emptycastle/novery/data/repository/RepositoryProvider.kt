@@ -72,8 +72,18 @@ object RepositoryProvider {
         return libraryRepository ?: LibraryRepository(
             libraryDao = getDatabase().libraryDao(),
             offlineDao = getDatabase().offlineDao(),
-            updateHistoryDao = getDatabase().updateHistoryDao()
+            updateHistoryDao = getDatabase().updateHistoryDao(),
+            workDao = getDatabase().workDao()
         ).also { libraryRepository = it }
+    }
+
+    private var workRepository: WorkRepository? = null
+
+    fun getWorkRepository(): WorkRepository {
+        return workRepository ?: WorkRepository(
+            workDao = getDatabase().workDao(),
+            libraryDao = getDatabase().libraryDao()
+        ).also { workRepository = it }
     }
 
     fun getHistoryRepository(): HistoryRepository {
