@@ -4,11 +4,12 @@ import android.content.Context
 import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.TimeUnit
 
@@ -21,6 +22,7 @@ import java.util.concurrent.TimeUnit
 object LibraryUpdateScheduler {
 
     const val UNIQUE_WORK_NAME = "novery_library_update"
+    const val UNIQUE_NOW_NAME = "novery_library_update_now"
     const val WORK_TAG = "novery_library_update"
     private const val TAG = "LibraryUpdateScheduler"
 
@@ -63,7 +65,6 @@ object LibraryUpdateScheduler {
         )
             .setConstraints(buildConstraints(wifiOnly, requireCharging))
             .addTag(WORK_TAG)
-            .setInputData(workDataOf(LibraryUpdateWorker.KEY_ENABLED_SNAPSHOT to true))
             .build()
         workManager.enqueueUniquePeriodicWork(
             UNIQUE_WORK_NAME,
@@ -82,6 +83,24 @@ object LibraryUpdateScheduler {
             .setRequiresCharging(requireCharging)
             .setRequiresBatteryNotLow(true)
             .build()
+    }
+
+    /**
+     * One-shot manual trigger ("Check now" in Settings). Uses the same worker
+     * and constraints; does not disturb the periodic schedule.
+     */
+    fun runNow(context: Context, wifiOnly: Boolean, requireCharging: Boolean) {
+        val request = OneTimeWorkRequestBuilder<LibraryUpdateWorker>()
+            .setConstraints(buildConstraints(wifiOnly, requireCharging))
+            .addTag(WORK_TAG)
+            .build()
+        WorkManager.getInstance(context.applicationContext)
+            .enqueueUniqueWork(
+                UNIQUE_NOW_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                request
+            )
+        Log.i(TAG, "Library update check-now enqueued")
     }
 
     /** Synchronous snapshot for verification/debugging (tests, logcat). */

@@ -1,5 +1,6 @@
 package com.emptycastle.novery.ui.screens.settings
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -510,6 +511,24 @@ fun SettingsScreen(
                                         context, true, libraryUpdateIntervalHours,
                                         libraryUpdateWifiOnly, it
                                     )
+                                }
+                            )
+                            SettingsDivider()
+                            NavigationItem(
+                                icon = Icons.Outlined.DownloadForOffline,
+                                title = "Check Now",
+                                subtitle = "Run a library check in the background",
+                                onClick = {
+                                    LibraryUpdateScheduler.runNow(
+                                        context,
+                                        libraryUpdateWifiOnly,
+                                        libraryUpdateRequireCharging
+                                    )
+                                    Toast.makeText(
+                                        context,
+                                        "Checking library for new chapters…",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             )
                         }
