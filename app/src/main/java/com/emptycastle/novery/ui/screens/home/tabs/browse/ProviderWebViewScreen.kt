@@ -128,6 +128,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.emptycastle.novery.data.remote.CloudflareManager
+import com.emptycastle.novery.data.remote.cloudflare.CloudflareSolver
 import com.emptycastle.novery.provider.MainProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -1424,6 +1425,31 @@ fun ProviderWebViewScreen(
                     CloudflareManager.clearCookiesForDomain(domain)
                     cookieStatus = CookieDisplayStatus.NONE
                 },
+                // Slice-02.2: headless auto-solve via an invisible session.
+                onAutoSolve = {
+                    val targetUrl = currentUrl
+                    scope.launch {
+                        cookieStatus = CookieDisplayStatus.CHECKING
+                        val result = CloudflareSolver.solve(context, targetUrl)
+                        val stored = CloudflareManager.getCookieStatus(targetUrl)
+                        cookieStatus = when (stored) {
+                            CloudflareManager.CookieStatus.VALID -> CookieDisplayStatus.VALID
+                            CloudflareManager.CookieStatus.EXPIRED -> CookieDisplayStatus.EXPIRED
+                            else -> CookieDisplayStatus.NONE
+                        }
+                        snackbarHostState.showSnackbar(
+                            when (result) {
+                                CloudflareSolver.SolveResult.Cleared -> "Challenge cleared — reloading"
+                                CloudflareSolver.SolveResult.NoChallenge -> "No challenge on this page"
+                                CloudflareSolver.SolveResult.Timeout -> "Auto-solve timed out — solve in browser or retry"
+                                CloudflareSolver.SolveResult.Failed -> "Auto-solve unavailable right now"
+                            }
+                        )
+                        if (result == CloudflareSolver.SolveResult.Cleared) {
+                            webView?.reload()
+                        }
+                    }
+                },
                 onExtractData = extractPageData
             )
         },
@@ -2298,7 +2324,9 @@ private fun EnhancedWebViewTopBar(
     onClose: () -> Unit,
     onRefresh: () -> Unit,
     onClearCookies: () -> Unit,
-    onExtractData: () -> Unit
+    onExtractData: () -> Unit,
+    // Slice-02.2: headless auto-solve entry point (optional for callers).
+    onAutoSolve: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
@@ -2421,6 +2449,10 @@ private fun EnhancedWebViewTopBar(
                             },
                             onClose = {
                                 onClose()
+                                showMenu = false
+                            },
+                            onAutoSolve = {
+                                onAutoSolve()
                                 showMenu = false
                             }
                         )
@@ -2648,7 +2680,9 @@ private fun EnhancedDropdownMenu(
     onClearCookies: () -> Unit,
     onEditUrl: () -> Unit,
     onExtractData: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    // Slice-02.2: headless auto-solve entry point (optional for callers).
+    onAutoSolve: () -> Unit = {}
 ) {
     DropdownMenu(
         expanded = expanded,
@@ -2746,6 +2780,14 @@ private fun EnhancedDropdownMenu(
                 onClick = onClearCookies
             )
         }
+
+        // Slice-02.2: headless auto-solve (invisible WebView session).
+        EnhancedMenuItem(
+            text = "Auto-Solve Challenge",
+            description = "Try clearing Cloudflare automatically",
+            icon = Icons.Rounded.Refresh,
+            onClick = onAutoSolve
+        )
 
         EnhancedMenuItem(
             text = "Close Browser",

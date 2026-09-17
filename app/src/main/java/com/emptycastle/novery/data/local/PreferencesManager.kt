@@ -91,6 +91,12 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getBoolean(KEY_LIBRARY_UPDATE_REQUIRE_CHARGING, false))
     val libraryUpdateRequireCharging: StateFlow<Boolean> = _libraryUpdateRequireCharging.asStateFlow()
 
+    // Slice-02.3: automatic headless Cloudflare solving on blocked
+    // responses. Default OFF — explicit opt-in in Settings.
+    private val _cfAutoSolve =
+        MutableStateFlow(prefs.getBoolean(KEY_CF_AUTO_SOLVE, false))
+    val cfAutoSolve: StateFlow<Boolean> = _cfAutoSolve.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -593,6 +599,20 @@ class PreferencesManager(context: Context) {
     fun setLibraryUpdateRequireCharging(requireCharging: Boolean) {
         prefs.edit().putBoolean(KEY_LIBRARY_UPDATE_REQUIRE_CHARGING, requireCharging).apply()
         _libraryUpdateRequireCharging.value = requireCharging
+    }
+
+    // =========================================================================
+    // SLICE-02.3: CLOUDFLARE AUTO-SOLVE
+    // =========================================================================
+
+    fun setCfAutoSolve(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CF_AUTO_SOLVE, enabled).apply()
+        _cfAutoSolve.value = enabled
+    }
+
+    private fun resetCfSettings() {
+        prefs.edit().putBoolean(KEY_CF_AUTO_SOLVE, false).apply()
+        _cfAutoSolve.value = false
     }
 
     private fun resetLibraryUpdateSettings() {
@@ -1581,6 +1601,9 @@ class PreferencesManager(context: Context) {
 
         // Reset slice-01 scheduled library updates
         resetLibraryUpdateSettings()
+
+        // Reset slice-02 Cloudflare settings
+        resetCfSettings()
     }
 
     /**
@@ -1815,6 +1838,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_LIBRARY_UPDATE_INTERVAL_HOURS = "library_update_interval_hours"
         private const val KEY_LIBRARY_UPDATE_WIFI_ONLY = "library_update_wifi_only"
         private const val KEY_LIBRARY_UPDATE_REQUIRE_CHARGING = "library_update_require_charging"
+        private const val KEY_CF_AUTO_SOLVE = "cf_auto_solve"
 
         // =====================================================================
         // APP SETTINGS KEYS

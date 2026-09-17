@@ -21,7 +21,9 @@ data class ProviderBrowseUiState(
     val isRefreshing: Boolean = false,
     val error: String? = null,
     val selectedExtraFilters: Map<String, String> = emptyMap(),
-    val isCloudflareError: Boolean = false
+    val isCloudflareError: Boolean = false,
+    // Slice-02.4: auto-solve cooldown remaining at last check (0 = none).
+    val cfCooldownRemainingMs: Long = 0L
 ) {
     val displayNovels: List<Novel>
         get() = if (isSearchMode) searchResults else novels

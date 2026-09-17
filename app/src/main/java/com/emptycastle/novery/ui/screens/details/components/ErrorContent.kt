@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,7 +35,9 @@ import androidx.compose.ui.unit.dp
 fun ErrorContent(
     error: String,
     onRetry: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // Slice-02.4: optional "Verify in Browser" entry for CF-blocked novels.
+    onOpenWebView: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -73,7 +76,8 @@ fun ErrorContent(
         // Action buttons
         ErrorActionButtons(
             onBack = onBack,
-            onRetry = onRetry
+            onRetry = onRetry,
+            onOpenWebView = onOpenWebView
         )
     }
 }
@@ -99,37 +103,49 @@ private fun ErrorIcon() {
 @Composable
 private fun ErrorActionButtons(
     onBack: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onOpenWebView: (() -> Unit)? = null
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        OutlinedButton(
-            onClick = onBack,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.height(48.dp)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                null,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Go Back", fontWeight = FontWeight.SemiBold)
+            OutlinedButton(
+                onClick = onBack,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.height(48.dp)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Go Back", fontWeight = FontWeight.SemiBold)
+            }
+
+            Button(
+                onClick = onRetry,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.height(48.dp)
+            ) {
+                Icon(
+                    Icons.Default.Refresh,
+                    null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Retry", fontWeight = FontWeight.SemiBold)
+            }
         }
 
-        Button(
-            onClick = onRetry,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.height(48.dp)
-        ) {
-            Icon(
-                Icons.Default.Refresh,
-                null,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Retry", fontWeight = FontWeight.SemiBold)
+        if (onOpenWebView != null) {
+            TextButton(onClick = onOpenWebView) {
+                Text("Verify in Browser", fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }

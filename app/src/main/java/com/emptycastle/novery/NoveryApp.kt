@@ -4,6 +4,8 @@ import android.app.Application
 import com.emptycastle.novery.data.local.NovelDatabase
 import com.emptycastle.novery.data.local.PreferencesManager
 import com.emptycastle.novery.data.remote.CloudflareManager
+import com.emptycastle.novery.data.remote.NetworkClient
+import com.emptycastle.novery.data.remote.cloudflare.AppForegroundTracker
 import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.data.update.LibraryUpdateScheduler
 import com.emptycastle.novery.provider.AllNovelProvider
@@ -35,7 +37,10 @@ class NoveryApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        registerActivityLifecycleCallbacks(AppForegroundTracker)
+
         CloudflareManager.init(this)
+        NetworkClient.init(this)
 
         // Initialize repository provider (only once!)
         RepositoryProvider.initialize(this)

@@ -93,6 +93,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -123,6 +124,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.emptycastle.novery.domain.model.AppSettings
 import com.emptycastle.novery.domain.model.Novel
@@ -202,6 +206,24 @@ fun ProviderBrowseScreen(
 
     LaunchedEffect(uiState.isSearchMode) {
         if (uiState.isSearchMode) isFilterOverlayOpen = false
+    }
+
+    // Slice-02.4: returning from the provider WebView (e.g. after manual
+    // verification) auto-retries a Cloudflare error when clearance is now
+    // valid, and refreshes the auto-solve cooldown snapshot.
+    // Reads viewModel.uiState.value inside the observer to avoid stale reads.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                viewModel.uiState.value.isCloudflareError
+            ) {
+                viewModel.refreshCooldownState()
+                viewModel.retryIfCleared()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     if (actionSheetState.isVisible && actionSheetState.data != null) {
@@ -309,6 +331,8 @@ fun ProviderBrowseScreen(
                             uiState.displayError != null && !uiState.isSearchMode -> {
                                 ErrorState(
                                     uiState = uiState,
+                                    cooldownMessage = formatCooldownMs(uiState.cfCooldownRemainingMs)
+                                        ?.let { "Auto-solve paused for $it — verify in browser instead" },
                                     onRetry = viewModel::loadPage,
                                     onOpenWebView = {
                                         onNavigateToWebView(providerName, uiState.providerUrl)
@@ -1910,7 +1934,8 @@ private fun MainContent(
 private fun ErrorState(
     uiState: ProviderBrowseUiState,
     onRetry: () -> Unit,
-    onOpenWebView: () -> Unit
+    onOpenWebView: () -> Unit,
+    cooldownMessage: String? = null
 ) {
     Box(
         modifier = Modifier
@@ -1922,6 +1947,7 @@ private fun ErrorState(
         ErrorStateCard(
             message = uiState.displayError ?: "Unknown error",
             isCloudflareError = uiState.isCloudflareError,
+            cooldownMessage = cooldownMessage,
             onRetry = onRetry,
             onOpenWebView = onOpenWebView
         )
@@ -1933,7 +1959,8 @@ private fun ErrorStateCard(
     message: String,
     isCloudflareError: Boolean,
     onRetry: () -> Unit,
-    onOpenWebView: () -> Unit
+    onOpenWebView: () -> Unit,
+    cooldownMessage: String? = null
 ) {
     Card(
         shape = RoundedCornerShape(BrowseDesign.radiusXl),
@@ -2007,6 +2034,16 @@ private fun ErrorStateCard(
                     }
                     TextButton(onClick = onRetry) {
                         Text("Try Again", fontWeight = FontWeight.Medium)
+                    }
+                    // Slice-02.4: tell the user auto-solve is cooling down so
+                    // they pick the browser path instead of hammering retry.
+                    if (cooldownMessage != null) {
+                        Text(
+                            text = cooldownMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             } else {
