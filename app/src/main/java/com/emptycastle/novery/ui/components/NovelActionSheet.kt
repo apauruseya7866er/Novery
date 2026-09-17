@@ -61,7 +61,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -72,6 +74,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -101,6 +104,10 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.emptycastle.novery.data.repository.LibraryItem
 import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.repository.WorkMigration
+import com.emptycastle.novery.data.repository.WorkRepository
+import com.emptycastle.novery.domain.model.Chapter
+import com.emptycastle.novery.domain.model.NovelDetails
 import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.domain.model.RatingFormat
 import com.emptycastle.novery.domain.model.ReadingStatus
@@ -190,7 +197,9 @@ fun NovelActionSheet(
     onRemoveFromHistory: (() -> Unit)? = null,
     // Slice-03.3: suggest-only duplicate lookup (null = section hidden).
     onFindDuplicates: (suspend (Novel) -> List<LibraryItem>)? = null,
-    onOpenDuplicate: (LibraryItem) -> Unit = {}
+    onOpenDuplicate: (LibraryItem) -> Unit = {},
+    // Slice-04.1b: post-migration navigation (url + provider of the target).
+    onMigrated: ((String, String) -> Unit)? = null
 ) {
     var showCoverZoom by remember { mutableStateOf(false) }
     var showSynopsisOverlay by remember { mutableStateOf(false) }
@@ -199,6 +208,9 @@ fun NovelActionSheet(
     // Slice-03.3: duplicate candidates (null = not searched yet).
     var duplicates by remember(data.novel.url) { mutableStateOf<List<LibraryItem>?>(null) }
     var findingDuplicates by remember(data.novel.url) { mutableStateOf(false) }
+    // Slice-04.1b: work identity for migration + wizard target.
+    var workId by remember(data.novel.url) { mutableStateOf<Long?>(null) }
+    var migrateTarget by remember(data.novel.url) { mutableStateOf<LibraryItem?>(null) }
     val scope = rememberCoroutineScope()
 
     // Dialogs
@@ -337,11 +349,14 @@ fun NovelActionSheet(
                 DuplicatesSection(
                     duplicates = duplicates,
                     finding = findingDuplicates,
+                    workId = workId,
                     onFind = {
                         findingDuplicates = true
                         scope.launch {
                             try {
                                 duplicates = onFindDuplicates(data.novel)
+                                workId = RepositoryProvider.getWorkRepository()
+                                    .getWorkForNovel(data.novel.url)?.id
                             } catch (_: Exception) {
                                 duplicates = emptyList()
                             } finally {
@@ -354,6 +369,30 @@ fun NovelActionSheet(
                             sheetState.hide()
                             onDismiss()
                             onOpenDuplicate(item)
+                        }
+                    },
+                    onMoveHere = { item -> migrateTarget = item }
+                )
+            }
+
+            // Slice-04.1b: migration wizard.
+            val migrateItem = migrateTarget
+            if (migrateItem != null && workId != null) {
+                MigrateDialog(
+                    workId = workId!!,
+                    fromUrl = data.novel.url,
+                    target = migrateItem,
+                    onDismiss = { migrateTarget = null },
+                    onMigrated = { url, provider ->
+                        migrateTarget = null
+                        scope.launch {
+                            sheetState.hide()
+                            onDismiss()
+                            if (onMigrated != null) {
+                                onMigrated(url, provider)
+                            } else {
+                                onOpenDuplicate(migrateItem)
+                            }
                         }
                     }
                 )
@@ -609,14 +648,249 @@ private fun CompactHeader(
     }
 }
 
+// Slice-04.1b: migration wizard — moves this work's library state to the
+// target entry (position by chapter index, shelf, history, optional read
+// marks). Everything applies in one transaction; downloads stay behind.
+private sealed interface MigratePhase {
+    data object Loading : MigratePhase
+    data class Preview(
+        val sourceReadIndex: Int,
+        val sourceReadCount: Int,
+        val targetChapters: List<Chapter>,
+        val flags: WorkRepository.MigrateFlags
+    ) : MigratePhase
+    data object Working : MigratePhase
+    data class Done(val info: WorkRepository.MovedInfo) : MigratePhase
+    data object Switched : MigratePhase
+    data class Failed(val message: String) : MigratePhase
+}
+
+@Composable
+private fun MigrateDialog(
+    workId: Long,
+    fromUrl: String,
+    target: LibraryItem,
+    onDismiss: () -> Unit,
+    onMigrated: (String, String) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var phase by remember(target.novel.url) { mutableStateOf<MigratePhase>(MigratePhase.Loading) }
+
+    LaunchedEffect(target.novel.url) {
+        try {
+            val libs = RepositoryProvider.getLibraryRepository()
+            val novels = RepositoryProvider.getNovelRepository()
+            val history = RepositoryProvider.getHistoryRepository()
+            val source = libs.getEntry(fromUrl)
+            val provider = novels.getProvider(target.novel.apiName)
+                ?: throw IllegalArgumentException("Provider ${target.novel.apiName} unavailable")
+            val details = novels.loadNovelDetails(provider, target.novel.url).getOrThrow()
+            phase = MigratePhase.Preview(
+                sourceReadIndex = source?.lastReadChapterIndex ?: -1,
+                sourceReadCount = history.getReadChapterCount(fromUrl),
+                targetChapters = details.chapters,
+                flags = WorkRepository.MigrateFlags()
+            )
+        } catch (e: Exception) {
+            phase = MigratePhase.Failed(e.message ?: "Could not load target novel")
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = RoundedCornerShape(20.dp)) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Move to ${target.novel.name}?",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "${target.novel.apiName} · ${target.novel.url}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                when (val p = phase) {
+                    MigratePhase.Loading, MigratePhase.Working -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                            Text(
+                                text = if (p == MigratePhase.Loading) "Loading target…" else "Moving…",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    is MigratePhase.Preview -> {
+                        val position = if (p.flags.movePosition) {
+                            WorkMigration.mapPosition(p.sourceReadIndex, p.targetChapters)
+                        } else null
+                        Text(
+                            text = "Target has ${p.targetChapters.size} chapters.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = position?.let { "Continue from \"${it.newName}\"" }
+                                ?: "No reading position to move",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        MigrateFlagRow(
+                            label = "Reading position",
+                            checked = p.flags.movePosition,
+                            onChange = {
+                                phase = p.copy(flags = p.flags.copy(movePosition = it))
+                            }
+                        )
+                        MigrateFlagRow(
+                            label = "Shelf & status",
+                            checked = p.flags.moveShelf,
+                            onChange = {
+                                phase = p.copy(flags = p.flags.copy(moveShelf = it))
+                            }
+                        )
+                        MigrateFlagRow(
+                            label = "History entry",
+                            checked = p.flags.moveHistory,
+                            onChange = {
+                                phase = p.copy(flags = p.flags.copy(moveHistory = it))
+                            }
+                        )
+                        MigrateFlagRow(
+                            label = "Read checkmarks (by order)",
+                            checked = p.flags.moveReadMarks,
+                            onChange = {
+                                phase = p.copy(flags = p.flags.copy(moveReadMarks = it))
+                            }
+                        )
+                        Text(
+                            text = "Downloads stay on the old source.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Cancel") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    phase = MigratePhase.Working
+                                    try {
+                                        val repo = RepositoryProvider.getWorkRepository()
+                                        when (val outcome = repo.migrateWork(
+                                            workId, fromUrl, target.novel,
+                                            p.targetChapters, p.flags
+                                        )) {
+                                            is WorkRepository.MigrateOutcome.Moved ->
+                                                phase = MigratePhase.Done(outcome.info)
+                                            is WorkRepository.MigrateOutcome.SwitchedDefault ->
+                                                phase = MigratePhase.Switched
+                                            WorkRepository.MigrateOutcome.TargetInOtherWork ->
+                                                phase = MigratePhase.Failed(
+                                                    "Already part of another entry — merge arrives next."
+                                                )
+                                        }
+                                    } catch (e: Exception) {
+                                        phase = MigratePhase.Failed(
+                                            e.message ?: "Migration failed"
+                                        )
+                                    }
+                                }
+                            }) { Text("Move") }
+                        }
+                    }
+                    is MigratePhase.Done -> {
+                        Text(
+                            text = buildString {
+                                append("Moved! ")
+                                p.info.position?.let { append("Continue from \"${it.newName}\". ") }
+                                if (p.info.readMarks > 0) append("${p.info.readMarks} chapters marked read. ")
+                                if (p.info.historyMoved) append("History moved.")
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Close") }
+                            TextButton(onClick = {
+                                onMigrated(target.novel.url, target.novel.apiName)
+                            }) { Text("Open migrated novel") }
+                        }
+                    }
+                    MigratePhase.Switched -> {
+                        Text(
+                            text = "Already attached — switched the default source.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Close") }
+                            TextButton(onClick = {
+                                onMigrated(target.novel.url, target.novel.apiName)
+                            }) { Text("Open") }
+                        }
+                    }
+                    is MigratePhase.Failed -> {
+                        Text(
+                            text = p.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Close") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MigrateFlagRow(
+    label: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onChange(!checked) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 // Slice-03.3: suggest-only duplicate entries (same title, other sources).
 // Candidates stay suggestions — opening navigates, never merges.
 @Composable
 private fun DuplicatesSection(
     duplicates: List<LibraryItem>?,
     finding: Boolean,
+    workId: Long?,
     onFind: () -> Unit,
-    onOpen: (LibraryItem) -> Unit
+    onOpen: (LibraryItem) -> Unit,
+    onMoveHere: (LibraryItem) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -693,6 +967,16 @@ private fun DuplicatesSection(
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold
                         )
+                        // Slice-04.1b: migrate this work's state here.
+                        if (workId != null) {
+                            TextButton(onClick = { onMoveHere(item) }) {
+                                Text(
+                                    "Move here",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
                 }
             }
