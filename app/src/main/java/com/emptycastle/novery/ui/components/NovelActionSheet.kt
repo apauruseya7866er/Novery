@@ -61,6 +61,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -98,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.emptycastle.novery.data.repository.LibraryItem
 import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.domain.model.RatingFormat
@@ -185,12 +187,18 @@ fun NovelActionSheet(
     onAddToLibrary: ((ReadingStatus) -> Unit)?,
     onRemoveFromLibrary: (() -> Unit)?,
     onStatusChange: ((ReadingStatus) -> Unit)? = null,
-    onRemoveFromHistory: (() -> Unit)? = null
+    onRemoveFromHistory: (() -> Unit)? = null,
+    // Slice-03.3: suggest-only duplicate lookup (null = section hidden).
+    onFindDuplicates: (suspend (Novel) -> List<LibraryItem>)? = null,
+    onOpenDuplicate: (LibraryItem) -> Unit = {}
 ) {
     var showCoverZoom by remember { mutableStateOf(false) }
     var showSynopsisOverlay by remember { mutableStateOf(false) }
     var statusPickerMode by remember { mutableStateOf<StatusPickerMode?>(null) }
     var showRemoveConfirmation by remember { mutableStateOf(false) }
+    // Slice-03.3: duplicate candidates (null = not searched yet).
+    var duplicates by remember(data.novel.url) { mutableStateOf<List<LibraryItem>?>(null) }
+    var findingDuplicates by remember(data.novel.url) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Dialogs
@@ -323,6 +331,33 @@ fun NovelActionSheet(
                     }
                 }
             )
+
+            // Slice-03.3: suggest-only duplicate lookup for library entries.
+            if (data.isInLibrary && onFindDuplicates != null) {
+                DuplicatesSection(
+                    duplicates = duplicates,
+                    finding = findingDuplicates,
+                    onFind = {
+                        findingDuplicates = true
+                        scope.launch {
+                            try {
+                                duplicates = onFindDuplicates(data.novel)
+                            } catch (_: Exception) {
+                                duplicates = emptyList()
+                            } finally {
+                                findingDuplicates = false
+                            }
+                        }
+                    },
+                    onOpen = { item ->
+                        scope.launch {
+                            sheetState.hide()
+                            onDismiss()
+                            onOpenDuplicate(item)
+                        }
+                    }
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -568,6 +603,97 @@ private fun CompactHeader(
                         overflow = TextOverflow.Ellipsis,
                         fontWeight = FontWeight.Medium
                     )
+                }
+            }
+        }
+    }
+}
+
+// Slice-03.3: suggest-only duplicate entries (same title, other sources).
+// Candidates stay suggestions — opening navigates, never merges.
+@Composable
+private fun DuplicatesSection(
+    duplicates: List<LibraryItem>?,
+    finding: Boolean,
+    onFind: () -> Unit,
+    onOpen: (LibraryItem) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .padding(top = 4.dp)
+    ) {
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        when {
+            finding -> {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "Searching other sources…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            duplicates == null -> {
+                OutlinedButton(onClick = onFind) {
+                    Text("Find duplicates on other sources")
+                }
+            }
+            duplicates.isEmpty() -> {
+                Text(
+                    text = "No duplicate entries found",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            else -> {
+                Text(
+                    text = "Same novel on ${duplicates.size} other source${if (duplicates.size == 1) "" else "s"}:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                duplicates.forEach { item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onOpen(item) }
+                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.novel.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = item.novel.apiName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            text = "Open",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }

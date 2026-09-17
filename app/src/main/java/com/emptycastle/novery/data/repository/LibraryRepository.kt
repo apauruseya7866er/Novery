@@ -3,6 +3,7 @@ package com.emptycastle.novery.data.repository
 import com.emptycastle.novery.data.local.dao.LibraryDao
 import com.emptycastle.novery.data.local.dao.OfflineDao
 import com.emptycastle.novery.data.local.dao.UpdateHistoryDao
+import com.emptycastle.novery.data.local.dao.WorkDao
 import com.emptycastle.novery.data.local.entity.LibraryEntity
 import com.emptycastle.novery.data.local.entity.NovelDetailsEntity
 import com.emptycastle.novery.data.local.entity.OfflineNovelEntity
@@ -50,7 +51,10 @@ data class LibraryItem(
     val isSpicy: Boolean = false,
 
     // Slice-01.4: predicted next-update epoch millis (null = not enough data)
-    val nextExpectedUpdateAt: Long? = null
+    val nextExpectedUpdateAt: Long? = null,
+
+    // Slice-03: stable work identity (null until backfilled).
+    val workId: Long? = null
 )
 
 /**
@@ -70,7 +74,8 @@ data class LibraryRefreshResult(
 class LibraryRepository(
     private val libraryDao: LibraryDao,
     private val offlineDao: OfflineDao,
-    private val updateHistoryDao: UpdateHistoryDao? = null
+    private val updateHistoryDao: UpdateHistoryDao? = null,
+    private val workDao: WorkDao? = null
 ) {
 
     // ================================================================
@@ -80,16 +85,26 @@ class LibraryRepository(
     fun observeLibrary(): Flow<List<LibraryItem>> {
         val entitiesFlow = libraryDao.getAllFlow()
         val historyDao = updateHistoryDao
-            ?: return entitiesFlow.map { entities ->
+        val wDao = workDao
+        if (historyDao == null && wDao == null) {
+            return entitiesFlow.map { entities ->
                 entities.map { entity -> entity.toLibraryItem() }
             }
+        }
+        val detectionsFlow = historyDao?.observeAllRecent()
+        val worksFlow = wDao?.observeAllProjections()
         return combine(
             entitiesFlow,
-            historyDao.observeAllRecent()
-        ) { entities, detections ->
+            detectionsFlow ?: kotlinx.coroutines.flow.flowOf(emptyList()),
+            worksFlow ?: kotlinx.coroutines.flow.flowOf(emptyList())
+        ) { entities, detections, projections ->
             val predictions = predictionsFor(detections.map { it.novelUrl to it.detectedAt })
+            val workIds = projections.associate { it.novelUrl to it.workId }
             entities.map { entity ->
-                entity.toLibraryItem(nextExpectedUpdateAt = predictions[entity.url])
+                entity.toLibraryItem(
+                    nextExpectedUpdateAt = predictions[entity.url],
+                    workId = workIds[entity.url]
+                )
             }
         }
     }
@@ -133,11 +148,15 @@ class LibraryRepository(
             updateHistoryDao?.getAllRecent()?.map { it.novelUrl to it.detectedAt }
                 ?: emptyList()
         )
+        val workIds = workDao?.getAllProjections()
+            ?.associate { it.novelUrl to it.workId }
+            ?: emptyMap()
 
         entities.map { entity ->
             entity.toLibraryItem(
                 downloadCount = downloadCounts[entity.url] ?: 0,
-                nextExpectedUpdateAt = predictions[entity.url]
+                nextExpectedUpdateAt = predictions[entity.url],
+                workId = workIds[entity.url]
             )
         }
     }
@@ -579,7 +598,8 @@ class LibraryRepository(
 
     private fun LibraryEntity.toLibraryItem(
         downloadCount: Int = 0,
-        nextExpectedUpdateAt: Long? = null
+        nextExpectedUpdateAt: Long? = null,
+        workId: Long? = null
     ): LibraryItem {
         return LibraryItem(
             novel = toNovel(),
@@ -601,7 +621,8 @@ class LibraryRepository(
             hasNewChapters = hasNewChapters,
             lastCheckedAt = lastCheckedAt,
             isSpicy = getStatus() == ReadingStatus.SPICY,
-            nextExpectedUpdateAt = nextExpectedUpdateAt
+            nextExpectedUpdateAt = nextExpectedUpdateAt,
+            workId = workId
         )
     }
 

@@ -21,6 +21,7 @@ import com.emptycastle.novery.data.local.dao.RecommendationDao
 import com.emptycastle.novery.data.local.dao.StatsDao
 import com.emptycastle.novery.data.local.dao.UpdateHistoryDao
 import com.emptycastle.novery.data.local.dao.UserFilterDao
+import com.emptycastle.novery.data.local.dao.WorkDao
 import com.emptycastle.novery.data.local.entity.AuthorPreferenceEntity
 import com.emptycastle.novery.data.local.entity.BlockedAuthorEntity
 import com.emptycastle.novery.data.local.entity.BookmarkEntity
@@ -39,6 +40,8 @@ import com.emptycastle.novery.data.local.entity.ReadingStatsEntity
 import com.emptycastle.novery.data.local.entity.ReadingStreakEntity
 import com.emptycastle.novery.data.local.entity.UpdateDetectionEntity
 import com.emptycastle.novery.data.local.entity.UserPreferenceEntity
+import com.emptycastle.novery.data.local.entity.WorkEntity
+import com.emptycastle.novery.data.local.entity.WorkProjectionEntity
 import com.emptycastle.novery.data.local.entity.UserTagFilterEntity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -98,8 +101,10 @@ class DatabaseConverters {
         BlockedAuthorEntity::class,
         AuthorPreferenceEntity::class,
         UpdateDetectionEntity::class,
+        WorkEntity::class,
+        WorkProjectionEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -118,6 +123,7 @@ abstract class NovelDatabase : RoomDatabase() {
     abstract fun userFilterDao(): UserFilterDao
     abstract fun authorPreferenceDao(): AuthorPreferenceDao
     abstract fun updateHistoryDao(): UpdateHistoryDao
+    abstract fun workDao(): WorkDao
 
     companion object {
         @Volatile
@@ -140,7 +146,8 @@ abstract class NovelDatabase : RoomDatabase() {
                         MIGRATION_7_8,
                         MIGRATION_8_9,
                         MIGRATION_9_10,
-                        MIGRATION_10_11
+                        MIGRATION_10_11,
+                        MIGRATION_11_12
                     )
                     .fallbackToDestructiveMigration()
                     .build()
@@ -458,6 +465,36 @@ abstract class NovelDatabase : RoomDatabase() {
                 """)
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_update_detections_novelUrl ON update_detections(novelUrl)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_update_detections_detectedAt ON update_detections(detectedAt)")
+            }
+        }
+
+        /**
+         * Migration 11 -> 12
+         * Adds works + work_projections tables for slice-03 entity layer.
+         * Tables only — row backfill runs idempotently in Kotlin
+         * (WorkRepository.ensureBackfilled) so ordering can never mismatch.
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS works (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        defaultNovelUrl TEXT
+                    )
+                """)
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS work_projections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        workId INTEGER NOT NULL,
+                        novelUrl TEXT NOT NULL,
+                        providerName TEXT NOT NULL,
+                        addedAt INTEGER NOT NULL,
+                        FOREIGN KEY(workId) REFERENCES works(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """)
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_work_projections_workId ON work_projections(workId)")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_work_projections_novelUrl ON work_projections(novelUrl)")
             }
         }
 

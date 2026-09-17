@@ -24,6 +24,10 @@ import com.emptycastle.novery.provider.WtrLabProvider
 import com.emptycastle.novery.service.NotificationHelper
 import com.emptycastle.novery.tts.TTSManager
 import com.emptycastle.novery.tts.VoiceManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Application class - initializes app-wide dependencies.
@@ -33,6 +37,8 @@ class NoveryApp : Application() {
     // Lazy-initialized singletons
     val database: NovelDatabase by lazy { NovelDatabase.getInstance(this) }
     val preferences: PreferencesManager by lazy { PreferencesManager.getInstance(this) }
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -66,6 +72,19 @@ class NoveryApp : Application() {
 
         // Create notification channels
         NotificationHelper.createNotificationChannels(this)
+
+        // Slice-03: idempotent work/projection backfill (orphaned if it
+        // fails — retried next launch; never blocks startup).
+        appScope.launch {
+            try {
+                val created = RepositoryProvider.getWorkRepository().ensureBackfilled()
+                if (created > 0) {
+                    android.util.Log.i("NoveryApp", "Entity backfill: created $created work(s)")
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("NoveryApp", "Entity backfill failed", e)
+            }
+        }
 
         // Slice-01: apply saved scheduled-library-update state (default OFF).
         val updatePrefs = RepositoryProvider.getPreferencesManager()

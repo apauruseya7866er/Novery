@@ -10,6 +10,7 @@ import com.emptycastle.novery.data.repository.LibraryItem
 import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.domain.model.LibraryFilter
 import com.emptycastle.novery.domain.model.LibrarySortOrder
+import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.domain.model.ReadingStatus
 import com.emptycastle.novery.service.DownloadPriority
 import com.emptycastle.novery.service.DownloadRequest
@@ -625,6 +626,19 @@ class LibraryViewModel : ViewModel() {
 
     fun hideActionSheet() {
         actionSheetManager.hide()
+    }
+
+    /**
+     * Slice-03.3: suggest-only duplicate lookup for the action sheet.
+     * Returns same-title library entries from other sources.
+     */
+    suspend fun findDuplicateEntries(novel: Novel): List<LibraryItem> {
+        return try {
+            libraryRepository.findDuplicateCandidates(novel)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding duplicates", e)
+            emptyList()
+        }
     }
 
     fun updateReadingStatus(status: ReadingStatus) {

@@ -189,7 +189,12 @@ fun LibraryTab(
             onAddToLibrary = null,
             onRemoveFromLibrary = { viewModel.removeFromLibrary(data.novel.url) },
             onRemoveFromHistory = null,
-            onStatusChange = { status -> viewModel.updateReadingStatus(status) }
+            onStatusChange = { status -> viewModel.updateReadingStatus(status) },
+            // Slice-03.3: suggest-only duplicates (open navigates, never merges).
+            onFindDuplicates = { novel -> viewModel.findDuplicateEntries(novel) },
+            onOpenDuplicate = { item ->
+                onNavigateToDetails(item.novel.url, item.novel.apiName)
+            }
         )
     }
 
