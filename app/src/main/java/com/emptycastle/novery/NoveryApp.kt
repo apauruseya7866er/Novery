@@ -1,6 +1,7 @@
 package com.emptycastle.novery
 
 import android.app.Application
+import com.emptycastle.novery.data.backup.BackupScheduler
 import com.emptycastle.novery.data.local.NovelDatabase
 import com.emptycastle.novery.data.local.PreferencesManager
 import com.emptycastle.novery.data.remote.CloudflareManager
@@ -94,6 +95,13 @@ class NoveryApp : Application() {
             updatePrefs.libraryUpdateIntervalHours.value,
             updatePrefs.libraryUpdateWifiOnly.value,
             updatePrefs.libraryUpdateRequireCharging.value
+        )
+
+        // Slice-06.2: apply saved auto-backup state (default OFF).
+        BackupScheduler.apply(
+            this,
+            updatePrefs.backupAutoEnabled.value,
+            updatePrefs.backupAutoIntervalHours.value
         )
     }
 

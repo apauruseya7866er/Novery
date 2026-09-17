@@ -74,12 +74,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.emptycastle.novery.data.backup.BackupScheduler
+import com.emptycastle.novery.data.repository.RepositoryProvider
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -157,6 +162,13 @@ fun StorageScreen(
     var showClearDownloadsDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showClearNovelDialog by remember { mutableStateOf<NovelDownloadInfo?>(null) }
+
+    // Slice-06.2: auto-backup state.
+    val context = LocalContext.current
+    val preferencesManager = remember { RepositoryProvider.getPreferencesManager() }
+    val backupAutoEnabled by preferencesManager.backupAutoEnabled.collectAsStateWithLifecycle()
+    val backupAutoIntervalHours by preferencesManager.backupAutoIntervalHours.collectAsStateWithLifecycle()
+    val backupLastAutoAt by preferencesManager.backupLastAutoAt.collectAsStateWithLifecycle()
 
     // Sorted downloads
     val sortedDownloads = remember(novelDownloads, downloadSortOrder) {
@@ -291,6 +303,31 @@ fun StorageScreen(
                         restoreLauncher.launch(
                             arrayOf(BackupData.MIME_TYPE, "application/json", "*/*")
                         )
+                    }
+                )
+            }
+
+            // Slice-06.2: scheduled auto-backup.
+            item(key = "auto_backup_card") {
+                AutoBackupCard(
+                    enabled = backupAutoEnabled,
+                    intervalHours = backupAutoIntervalHours,
+                    lastBackupAt = backupLastAutoAt,
+                    onEnabledChange = {
+                        preferencesManager.setBackupAutoEnabled(it)
+                        BackupScheduler.apply(
+                            context, it, backupAutoIntervalHours
+                        )
+                    },
+                    onIntervalChange = { hours ->
+                        preferencesManager.setBackupAutoIntervalHours(hours)
+                        BackupScheduler.apply(context, true, hours)
+                    },
+                    onBackupNow = {
+                        BackupScheduler.runNow(context)
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Backup started in background")
+                        }
                     }
                 )
             }
@@ -847,6 +884,99 @@ private fun BackupRestoreCard(
                             }
                             Spacer(Modifier.width(8.dp))
                             Text(if (restoring) "Restoring…" else "Restore")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Auto-Backup Card (Slice-06.2) ─────────────────────────────────────────────
+
+@Composable
+private fun AutoBackupCard(
+    enabled: Boolean,
+    intervalHours: Long,
+    lastBackupAt: Long,
+    onEnabledChange: (Boolean) -> Unit,
+    onIntervalChange: (Long) -> Unit,
+    onBackupNow: () -> Unit
+) {
+    var intervalExpanded by remember { mutableStateOf(false) }
+    val intervals = BackupScheduler.SUPPORTED_INTERVALS_HOURS
+    val dateFormat = remember {
+        SimpleDateFormat("MMM dd, yyyy 'at' HH:mm", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Automatic Backups",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (lastBackupAt > 0) {
+                            "Last backup: ${dateFormat.format(Date(lastBackupAt))}"
+                        } else {
+                            "Keeps the last ${BackupScheduler.KEEP_AUTO_BACKUPS} backups on this device"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            }
+
+            AnimatedVisibility(visible = enabled) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Every",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Box {
+                            OutlinedButton(onClick = { intervalExpanded = true }) {
+                                Text(BackupScheduler.intervalLabel(intervalHours))
+                            }
+                            DropdownMenu(
+                                expanded = intervalExpanded,
+                                onDismissRequest = { intervalExpanded = false }
+                            ) {
+                                intervals.forEach { hours ->
+                                    DropdownMenuItem(
+                                        text = { Text(BackupScheduler.intervalLabel(hours)) },
+                                        onClick = {
+                                            intervalExpanded = false
+                                            onIntervalChange(hours)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        TextButton(onClick = onBackupNow) {
+                            Text("Back up now")
                         }
                     }
                 }

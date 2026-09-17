@@ -97,6 +97,19 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getBoolean(KEY_CF_AUTO_SOLVE, false))
     val cfAutoSolve: StateFlow<Boolean> = _cfAutoSolve.asStateFlow()
 
+    // Slice-06.2: scheduled auto-backup (default OFF).
+    private val _backupAutoEnabled =
+        MutableStateFlow(prefs.getBoolean(KEY_BACKUP_AUTO_ENABLED, false))
+    val backupAutoEnabled: StateFlow<Boolean> = _backupAutoEnabled.asStateFlow()
+
+    private val _backupAutoIntervalHours =
+        MutableStateFlow(prefs.getLong(KEY_BACKUP_AUTO_INTERVAL_HOURS, 24L))
+    val backupAutoIntervalHours: StateFlow<Long> = _backupAutoIntervalHours.asStateFlow()
+
+    private val _backupLastAutoAt =
+        MutableStateFlow(prefs.getLong(KEY_BACKUP_LAST_AUTO_AT, 0L))
+    val backupLastAutoAt: StateFlow<Long> = _backupLastAutoAt.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -613,6 +626,38 @@ class PreferencesManager(context: Context) {
     private fun resetCfSettings() {
         prefs.edit().putBoolean(KEY_CF_AUTO_SOLVE, false).apply()
         _cfAutoSolve.value = false
+    }
+
+    // =========================================================================
+    // SLICE-06.2: SCHEDULED AUTO-BACKUP
+    // =========================================================================
+
+    fun setBackupAutoEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BACKUP_AUTO_ENABLED, enabled).apply()
+        _backupAutoEnabled.value = enabled
+    }
+
+    fun setBackupAutoIntervalHours(hours: Long) {
+        val clamped = hours.coerceIn(12L, 168L)
+        prefs.edit().putLong(KEY_BACKUP_AUTO_INTERVAL_HOURS, clamped).apply()
+        _backupAutoIntervalHours.value = clamped
+    }
+
+    fun setBackupLastAutoAt(timestamp: Long) {
+        prefs.edit().putLong(KEY_BACKUP_LAST_AUTO_AT, timestamp).apply()
+        _backupLastAutoAt.value = timestamp
+    }
+
+    private fun resetBackupAutoSettings() {
+        prefs.edit().apply {
+            putBoolean(KEY_BACKUP_AUTO_ENABLED, false)
+            putLong(KEY_BACKUP_AUTO_INTERVAL_HOURS, 24L)
+            remove(KEY_BACKUP_LAST_AUTO_AT)
+            apply()
+        }
+        _backupAutoEnabled.value = false
+        _backupAutoIntervalHours.value = 24L
+        _backupLastAutoAt.value = 0L
     }
 
     private fun resetLibraryUpdateSettings() {
@@ -1604,6 +1649,9 @@ class PreferencesManager(context: Context) {
 
         // Reset slice-02 Cloudflare settings
         resetCfSettings()
+
+        // Reset slice-06 auto-backup settings
+        resetBackupAutoSettings()
     }
 
     /**
@@ -1839,6 +1887,9 @@ class PreferencesManager(context: Context) {
         private const val KEY_LIBRARY_UPDATE_WIFI_ONLY = "library_update_wifi_only"
         private const val KEY_LIBRARY_UPDATE_REQUIRE_CHARGING = "library_update_require_charging"
         private const val KEY_CF_AUTO_SOLVE = "cf_auto_solve"
+        private const val KEY_BACKUP_AUTO_ENABLED = "backup_auto_enabled"
+        private const val KEY_BACKUP_AUTO_INTERVAL_HOURS = "backup_auto_interval_hours"
+        private const val KEY_BACKUP_LAST_AUTO_AT = "backup_last_auto_at"
 
         // =====================================================================
         // APP SETTINGS KEYS
