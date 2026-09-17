@@ -25,6 +25,11 @@ class LibraryUpdateWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        // Slice-05.4: visible in the in-app banner while running.
+        BackgroundWorkTracker.start(
+            BackgroundWorkTracker.ID_LIBRARY_UPDATE,
+            "Checking library for new chapters"
+        )
         return try {
             val libraryRepository = RepositoryProvider.getLibraryRepository()
             val novelRepository = RepositoryProvider.getNovelRepository()
@@ -66,6 +71,10 @@ class LibraryUpdateWorker(
                     novelUrls = eligible.map { it.novel.url }.toSet(),
                     onProgress = { current, total, name ->
                         Log.i(TAG, "LibraryUpdate: [$current/$total] $name")
+                        BackgroundWorkTracker.update(
+                            BackgroundWorkTracker.ID_LIBRARY_UPDATE,
+                            "$current/$total · $name"
+                        )
                     }
                 )
                 recordDetections(beforeCounts)
@@ -93,6 +102,10 @@ class LibraryUpdateWorker(
                 notifySystem(withNew)
             }
 
+            // Slice-05.3: persist this run's failures for the error screen
+            // (replaces the previous snapshot, even when empty).
+            saveErrors(result.errorDetails)
+
             Log.i(
                 TAG,
                 "LibraryUpdate complete: checked=${result.totalChecked} " +
@@ -108,6 +121,8 @@ class LibraryUpdateWorker(
         } catch (e: Exception) {
             Log.e(TAG, "LibraryUpdate failed", e)
             if (runAttemptCount < 3) Result.retry() else Result.failure()
+        } finally {
+            BackgroundWorkTracker.finish(BackgroundWorkTracker.ID_LIBRARY_UPDATE)
         }
     }
 
@@ -120,6 +135,28 @@ class LibraryUpdateWorker(
             LibraryUpdateNotifier.notifyUpdates(applicationContext, withNew)
         } catch (e: Exception) {
             Log.w(TAG, "LibraryUpdate: system notification failed", e)
+        }
+    }
+
+    /**
+     * Slice-05.3: snapshots this run's failures. Isolated like notifySystem.
+     */
+    private suspend fun saveErrors(
+        errorDetails: List<com.emptycastle.novery.data.repository.RefreshError>
+    ) {
+        try {
+            RepositoryProvider.getUpdateErrorStore().replaceAll(
+                errorDetails.map { detail ->
+                    UpdateError(
+                        novelUrl = detail.novelUrl,
+                        novelName = detail.novelName,
+                        providerName = detail.providerName,
+                        message = detail.message
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "LibraryUpdate: error snapshot failed", e)
         }
     }
 

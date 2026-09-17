@@ -2,6 +2,7 @@ package com.emptycastle.novery.ui.screens.notification
 
 import com.emptycastle.novery.data.repository.LibraryItem
 import com.emptycastle.novery.data.repository.NotificationEntry
+import com.emptycastle.novery.data.update.UpdateError
 
 /**
  * Combined notification item with library data and notification state
@@ -35,5 +36,9 @@ data class NotificationUiState(
 
     val isMarkingAllSeen: Boolean = false,
 
-    val showClearConfirmation: Boolean = false
+    val showClearConfirmation: Boolean = false,
+
+    // Slice-05.3: last refresh failures with per-novel retry.
+    val updateErrors: List<UpdateError> = emptyList(),
+    val retryingUrls: Set<String> = emptySet()
 )

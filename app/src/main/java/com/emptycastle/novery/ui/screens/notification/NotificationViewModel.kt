@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.emptycastle.novery.data.repository.LibraryItem
 import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.update.UpdateError
 import com.emptycastle.novery.domain.model.LibraryFilter
 import com.emptycastle.novery.service.DownloadPriority
 import com.emptycastle.novery.service.DownloadRequest
@@ -34,6 +35,7 @@ class NotificationViewModel : ViewModel() {
 
     init {
         observeNotifications()
+        observeUpdateErrors()
     }
 
     private fun observeNotifications() {
@@ -276,4 +278,67 @@ class NotificationViewModel : ViewModel() {
     fun getReadingPosition(novelUrl: String) = _uiState.value.displayItems
         .find { it.libraryItem.novel.url == novelUrl }
         ?.libraryItem?.lastReadPosition
+
+    // ================================================================
+    // SLICE-05.3: UPDATE ERRORS
+    // ================================================================
+
+    private fun observeUpdateErrors() {
+        viewModelScope.launch {
+            try {
+                RepositoryProvider.getUpdateErrorStore().observeErrors().collect { errors ->
+                    _uiState.update { it.copy(updateErrors = errors) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error observing update errors", e)
+            }
+        }
+    }
+
+    /**
+     * Retries a single failed novel. On success the error entry clears;
+     * on repeat failure the entry refreshes with a new timestamp.
+     */
+    fun retryUpdateError(novelUrl: String) {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(retryingUrls = it.retryingUrls + novelUrl) }
+                val result = libraryRepository.refreshNovelsByUrls(
+                    getProvider = { name -> novelRepository.getProvider(name) },
+                    novelUrls = setOf(novelUrl),
+                    onProgress = { _, _, _ -> }
+                )
+                val store = RepositoryProvider.getUpdateErrorStore()
+                val stillFailing = result.errorDetails.find { it.novelUrl == novelUrl }
+                if (stillFailing != null) {
+                    val kept = _uiState.value.updateErrors
+                        .filter { it.novelUrl != novelUrl }
+                    store.replaceAll(
+                        kept + UpdateError(
+                            novelUrl = stillFailing.novelUrl,
+                            novelName = stillFailing.novelName,
+                            providerName = stillFailing.providerName,
+                            message = stillFailing.message
+                        )
+                    )
+                } else {
+                    store.clearFor(novelUrl)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error retrying update for $novelUrl", e)
+            } finally {
+                _uiState.update { it.copy(retryingUrls = it.retryingUrls - novelUrl) }
+            }
+        }
+    }
+
+    fun dismissUpdateError(novelUrl: String) {
+        viewModelScope.launch {
+            try {
+                RepositoryProvider.getUpdateErrorStore().clearFor(novelUrl)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error dismissing update error", e)
+            }
+        }
+    }
 }
