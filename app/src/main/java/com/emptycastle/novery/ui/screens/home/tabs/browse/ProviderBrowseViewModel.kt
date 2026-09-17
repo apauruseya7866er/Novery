@@ -3,6 +3,8 @@ package com.emptycastle.novery.ui.screens.home.tabs.browse
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.emptycastle.novery.data.remote.CloudflareManager
+import com.emptycastle.novery.data.remote.cloudflare.CloudflareSolver
 import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.domain.model.ReadingStatus
@@ -343,8 +345,60 @@ class ProviderBrowseViewModel(
                 },
                 isLoading = false,
                 isRefreshing = false,
-                isCloudflareError = isCloudflare
+                isCloudflareError = isCloudflare,
+                cfCooldownRemainingMs = if (isCloudflare) {
+                    currentCooldownMs(it.provider?.mainUrl)
+                } else {
+                    0L
+                }
             )
+        }
+    }
+
+    private fun currentCooldownMs(providerUrl: String?): Long {
+        if (providerUrl.isNullOrBlank()) return 0L
+        return try {
+            CloudflareSolver.cooldownRemainingMs(
+                CloudflareManager.getDomain(providerUrl)
+            )
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    /**
+     * Slice-02.4: refreshes the cooldown snapshot (call on return from the
+     * provider WebView).
+     */
+    fun refreshCooldownState() {
+        _uiState.update {
+            it.copy(cfCooldownRemainingMs = currentCooldownMs(it.provider?.mainUrl))
+        }
+    }
+
+    /**
+     * Slice-02.4: if the browse error was Cloudflare-caused and clearance
+     * is now stored (e.g. user verified in the WebView), reload
+     * automatically. Returns true when a reload was triggered.
+     */
+    fun retryIfCleared(): Boolean {
+        val state = _uiState.value
+        if (!state.isCloudflareError) return false
+        val url = state.providerUrl ?: return false
+        return try {
+            if (CloudflareManager.hasClearanceCookie(url)) {
+                android.util.Log.i(
+                    "ProviderBrowseVM",
+                    "Clearance now valid for $url — auto-retrying browse"
+                )
+                loadPage()
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("ProviderBrowseVM", "retryIfCleared failed", e)
+            false
         }
     }
 
@@ -505,5 +559,19 @@ class ProviderBrowseViewModel(
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return ProviderBrowseViewModel(providerName) as T
         }
+    }
+}
+
+/**
+ * Slice-02.4: human cooldown duration ("45s", "2m 05s"); null when none.
+ * Pure top-level function — unit-tested without a ViewModel instance.
+ */
+fun formatCooldownMs(ms: Long): String? {
+    if (ms <= 0) return null
+    val totalSeconds = (ms + 999) / 1000
+    return if (totalSeconds < 60) {
+        "${totalSeconds}s"
+    } else {
+        "${totalSeconds / 60}m %02d".format(totalSeconds % 60) + "s"
     }
 }

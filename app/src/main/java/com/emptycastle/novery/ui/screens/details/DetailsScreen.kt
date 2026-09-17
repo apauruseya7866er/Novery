@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -45,8 +46,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.emptycastle.novery.data.remote.CloudflareManager
 import com.emptycastle.novery.domain.model.Chapter
 import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.domain.model.NovelDetails
@@ -113,6 +118,32 @@ fun DetailsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // Slice-02.4: returning from the in-app browser (e.g. after manual CF
+    // verification) reloads a failed details page when clearance is valid.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val state = viewModel.uiState.value
+                if (state.error != null && state.novelDetails == null) {
+                    try {
+                        if (CloudflareManager.hasClearanceCookie(novelUrl)) {
+                            android.util.Log.i(
+                                "DetailsScreen",
+                                "Clearance now valid — auto-reloading $novelUrl"
+                            )
+                            viewModel.loadNovel(novelUrl, providerName)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("DetailsScreen", "resume retry failed", e)
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     uiState.duplicateWarning?.let { warning ->
         DuplicateLibraryDialog(
@@ -237,7 +268,9 @@ fun DetailsScreen(
                 ErrorContent(
                     error = uiState.error!!,
                     onRetry = { viewModel.loadNovel(novelUrl, providerName) },
-                    onBack = onBack
+                    onBack = onBack,
+                    // Slice-02.4: manual fallback for CF-blocked novels.
+                    onOpenWebView = { onOpenInWebView(providerName, novelUrl) }
                 )
             }
 
