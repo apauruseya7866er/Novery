@@ -53,4 +53,21 @@ object WorkMigration {
         if (targetTimestamp == null) return true
         return sourceTimestamp > targetTimestamp
     }
+
+    /**
+     * Slice-04.2: suggests which library row should survive a merge.
+     * Furthest read wins; ties break toward the earlier-added entry.
+     * @return true to keep A, false to keep B. Pure — unit-tested.
+     */
+    fun suggestKeepRow(
+        aLastReadIndex: Int,
+        aAddedAt: Long,
+        bLastReadIndex: Int,
+        bAddedAt: Long
+    ): Boolean {
+        if (aLastReadIndex != bLastReadIndex) {
+            return aLastReadIndex > bLastReadIndex
+        }
+        return aAddedAt <= bAddedAt
+    }
 }

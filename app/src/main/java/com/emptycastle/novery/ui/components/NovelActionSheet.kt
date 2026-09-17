@@ -94,6 +94,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -211,6 +212,8 @@ fun NovelActionSheet(
     // Slice-04.1b: work identity for migration + wizard target.
     var workId by remember(data.novel.url) { mutableStateOf<Long?>(null) }
     var migrateTarget by remember(data.novel.url) { mutableStateOf<LibraryItem?>(null) }
+    // Slice-04.2: merge target.
+    var mergeTarget by remember(data.novel.url) { mutableStateOf<LibraryItem?>(null) }
     val scope = rememberCoroutineScope()
 
     // Dialogs
@@ -350,8 +353,7 @@ fun NovelActionSheet(
                     duplicates = duplicates,
                     finding = findingDuplicates,
                     workId = workId,
-                    onFind = {
-                        findingDuplicates = true
+                    onFind = {                        findingDuplicates = true
                         scope.launch {
                             try {
                                 duplicates = onFindDuplicates(data.novel)
@@ -371,7 +373,36 @@ fun NovelActionSheet(
                             onOpenDuplicate(item)
                         }
                     },
-                    onMoveHere = { item -> migrateTarget = item }
+                    onMoveHere = { item -> migrateTarget = item },
+                    onMergeHere = { item -> mergeTarget = item }
+                )
+            }
+
+            // Slice-04.2: merge dialog.
+            val mergeItem = mergeTarget
+            if (mergeItem != null && workId != null && mergeItem.workId != null) {
+                MergeDialog(
+                    currentWorkId = workId!!,
+                    currentUrl = data.novel.url,
+                    candidate = mergeItem,
+                    onDismiss = { mergeTarget = null },
+                    onMerged = {
+                        mergeTarget = null
+                        // If this sheet's own row was the removed duplicate,
+                        // close the sheet — its entry no longer exists.
+                        scope.launch {
+                            val stillThere = try {
+                                RepositoryProvider.getLibraryRepository()
+                                    .getLibraryItem(data.novel.url) != null
+                            } catch (_: Exception) {
+                                true
+                            }
+                            if (!stillThere) {
+                                sheetState.hide()
+                                onDismiss()
+                            }
+                        }
+                    }
                 )
             }
 
@@ -648,6 +679,206 @@ private fun CompactHeader(
     }
 }
 
+// Slice-04.2: merge dialog — combines two entries of the same work into
+// one shelf row. Projections, history, read marks and downloads stay with
+// their URLs; only the duplicate row is removed.
+private sealed interface MergePhase {
+    data object Loading : MergePhase
+    data class Pick(
+        val currentIndex: Int,
+        val currentAddedAt: Long,
+        val candidateIndex: Int,
+        val candidateAddedAt: Long,
+        val keepCurrent: Boolean
+    ) : MergePhase
+    data object Working : MergePhase
+    data class Done(val removedRows: Int, val projections: Int) : MergePhase
+    data class Failed(val message: String) : MergePhase
+}
+
+@Composable
+private fun MergeDialog(
+    currentWorkId: Long,
+    currentUrl: String,
+    candidate: LibraryItem,
+    onDismiss: () -> Unit,
+    onMerged: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var phase by remember(candidate.novel.url) { mutableStateOf<MergePhase>(MergePhase.Loading) }
+
+    LaunchedEffect(candidate.novel.url) {
+        try {
+            val libs = RepositoryProvider.getLibraryRepository()
+            val current = libs.getEntry(currentUrl)
+            val other = libs.getEntry(candidate.novel.url)
+            if (current == null || other == null) {
+                phase = MergePhase.Failed("One of the entries left the library")
+                return@LaunchedEffect
+            }
+            phase = MergePhase.Pick(
+                currentIndex = current.lastReadChapterIndex,
+                currentAddedAt = current.addedAt,
+                candidateIndex = other.lastReadChapterIndex,
+                candidateAddedAt = other.addedAt,
+                keepCurrent = WorkMigration.suggestKeepRow(
+                    current.lastReadChapterIndex, current.addedAt,
+                    other.lastReadChapterIndex, other.addedAt
+                )
+            )
+        } catch (e: Exception) {
+            phase = MergePhase.Failed(e.message ?: "Could not load entries")
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = RoundedCornerShape(20.dp)) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Merge duplicate entries?",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Both sources stay attached to one entry. Only the extra shelf row is removed — progress, history and downloads are kept.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                when (val p = phase) {
+                    MergePhase.Loading, MergePhase.Working -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                            Text(
+                                text = if (p == MergePhase.Loading) "Loading…" else "Merging…",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    is MergePhase.Pick -> {
+                        MergeKeepRow(
+                            label = "Keep this entry",
+                            sub = "Read to chapter ${p.currentIndex + 1}",
+                            selected = p.keepCurrent,
+                            onSelect = { phase = p.copy(keepCurrent = true) }
+                        )
+                        MergeKeepRow(
+                            label = "Keep ${candidate.novel.apiName} entry",
+                            sub = "Read to chapter ${p.candidateIndex + 1}",
+                            selected = !p.keepCurrent,
+                            onSelect = { phase = p.copy(keepCurrent = false) }
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Cancel") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    phase = MergePhase.Working
+                                    try {
+                                        val repo = RepositoryProvider.getWorkRepository()
+                                        val candidateWorkId = candidate.workId
+                                            ?: throw IllegalStateException("Candidate has no work")
+                                        val (survivor, absorbed, keepUrl) = if (p.keepCurrent) {
+                                            Triple(currentWorkId, candidateWorkId, currentUrl)
+                                        } else {
+                                            Triple(candidateWorkId, currentWorkId, candidate.novel.url)
+                                        }
+                                        when (val outcome = repo.mergeWorks(survivor, absorbed, keepUrl)) {
+                                            is WorkRepository.MergeOutcome.Merged -> {
+                                                phase = MergePhase.Done(
+                                                    outcome.info.removedRows,
+                                                    outcome.info.projectionCount
+                                                )
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "Merged — ${outcome.info.projectionCount} sources, one entry",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                onMerged()
+                                            }
+                                            WorkRepository.MergeOutcome.SameWork ->
+                                                phase = MergePhase.Failed("Already the same entry")
+                                        }
+                                    } catch (e: Exception) {
+                                        phase = MergePhase.Failed(e.message ?: "Merge failed")
+                                    }
+                                }
+                            }) { Text("Merge") }
+                        }
+                    }
+                    is MergePhase.Done -> {
+                        Text(
+                            text = "Merged! Removed ${p.removedRows} duplicate row(s); " +
+                                "${p.projections} source(s) attached.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Close") }
+                        }
+                    }
+                    is MergePhase.Failed -> {
+                        Text(
+                            text = p.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = onDismiss) { Text("Close") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MergeKeepRow(
+    label: String,
+    sub: String,
+    selected: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onSelect() }
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Checkbox(checked = selected, onCheckedChange = { onSelect() })
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = sub,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 // Slice-04.1b: migration wizard — moves this work's library state to the
 // target entry (position by chapter index, shelf, history, optional read
 // marks). Everything applies in one transaction; downloads stay behind.
@@ -890,7 +1121,8 @@ private fun DuplicatesSection(
     workId: Long?,
     onFind: () -> Unit,
     onOpen: (LibraryItem) -> Unit,
-    onMoveHere: (LibraryItem) -> Unit
+    onMoveHere: (LibraryItem) -> Unit,
+    onMergeHere: (LibraryItem) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -972,6 +1204,16 @@ private fun DuplicatesSection(
                             TextButton(onClick = { onMoveHere(item) }) {
                                 Text(
                                     "Move here",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        // Slice-04.2: merge the two entries (keeps one row).
+                        if (workId != null && item.workId != null && item.workId != workId) {
+                            TextButton(onClick = { onMergeHere(item) }) {
+                                Text(
+                                    "Merge",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold
                                 )

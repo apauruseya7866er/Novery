@@ -94,6 +94,142 @@ class WorkRepository(
         }
 
     // =====================================================================
+    // SLICE-04.2: ATTACH / DETACH / MERGE
+    // =====================================================================
+
+    sealed interface AttachOutcome {
+        data object Attached : AttachOutcome
+        data object AlreadyAttached : AttachOutcome
+        /** URL belongs to a different work — merge explicitly instead. */
+        data object InOtherWork : AttachOutcome
+    }
+
+    /**
+     * Attaches a novel as an alternate source of a work WITHOUT creating a
+     * library row. Used by the duplicate warning ("add as alternate
+     * source") so users stop accumulating duplicate rows.
+     */
+    suspend fun attachProjection(workId: Long, novel: Novel): AttachOutcome =
+        withContext(Dispatchers.IO) {
+            val work = workDao.getWork(workId) ?: throw IllegalArgumentException("Work not found")
+            if (workDao.getProjections(workId).any { it.novelUrl == novel.url }) {
+                return@withContext AttachOutcome.AlreadyAttached
+            }
+            if (workDao.getProjectionByUrl(novel.url) != null) {
+                return@withContext AttachOutcome.InOtherWork
+            }
+            tx {
+                workDao.insertProjection(
+                    WorkProjectionEntity(
+                        workId = workId,
+                        novelUrl = novel.url,
+                        providerName = novel.apiName
+                    )
+                )
+                // First projection ever attached becomes the default.
+                if (work.defaultNovelUrl == null) {
+                    workDao.setDefaultNovelUrl(workId, novel.url)
+                }
+            }
+            AttachOutcome.Attached
+        }
+
+    sealed interface DetachOutcome {
+        data object Detached : DetachOutcome
+        data object LastProjection : DetachOutcome
+    }
+
+    /**
+     * Removes a projection's binding from a work. Never deletes library
+     * rows, history, downloads or the source entry itself. A detached
+     * projection that still has a library row becomes a standalone work on
+     * the next backfill (split-out for free).
+     */
+    suspend fun detachProjection(workId: Long, novelUrl: String): DetachOutcome =
+        withContext(Dispatchers.IO) {
+            val projections = workDao.getProjections(workId)
+            val target = projections.find { it.novelUrl == novelUrl }
+                ?: throw IllegalArgumentException("Projection not attached")
+            if (projections.size <= 1) {
+                return@withContext DetachOutcome.LastProjection
+            }
+            tx {
+                workDao.deleteProjection(target.id)
+                val work = workDao.getWork(workId)
+                if (work?.defaultNovelUrl == novelUrl) {
+                    val remaining = workDao.getProjections(workId)
+                    workDao.setDefaultNovelUrl(
+                        workId,
+                        remaining.minByOrNull { it.addedAt }?.novelUrl
+                    )
+                }
+            }
+            DetachOutcome.Detached
+        }
+
+    data class MergedInfo(
+        val keptRowUrl: String,
+        val removedRows: Int,
+        val projectionCount: Int
+    )
+
+    sealed interface MergeOutcome {
+        data class Merged(val info: MergedInfo) : MergeOutcome
+        data object SameWork : MergeOutcome
+    }
+
+    /**
+     * Merges [absorbedWorkId] into [survivingWorkId], keeping the library
+     * row [keepRowUrl] (all other rows of both works are removed from the
+     * shelf). Projections, history, read marks, bookmarks and downloads
+     * stay attached to their (surviving) URLs — only shelf rows move, so
+     * nothing the user created is lost except the duplicate row itself.
+     */
+    suspend fun mergeWorks(
+        survivingWorkId: Long,
+        absorbedWorkId: Long,
+        keepRowUrl: String
+    ): MergeOutcome = withContext(Dispatchers.IO) {
+        if (survivingWorkId == absorbedWorkId) {
+            return@withContext MergeOutcome.SameWork
+        }
+        val survivor = workDao.getProjections(survivingWorkId)
+        val absorbed = workDao.getProjections(absorbedWorkId)
+        if (survivor.isEmpty() || absorbed.isEmpty()) {
+            throw IllegalArgumentException("Cannot merge empty works")
+        }
+        val keepAttached = (survivor + absorbed).any { it.novelUrl == keepRowUrl }
+        require(keepAttached) { "Kept row is not part of either work" }
+        require(libraryDao.getByUrl(keepRowUrl) != null) { "Kept row is not in the library" }
+
+        var removed = 0
+        tx {
+            for (projection in absorbed) {
+                workDao.deleteProjection(projection.id)
+                workDao.insertProjection(projection.copy(id = 0, workId = survivingWorkId))
+                if (projection.novelUrl != keepRowUrl) {
+                    if (libraryDao.getByUrl(projection.novelUrl) != null) {
+                        libraryDao.delete(projection.novelUrl)
+                        removed++
+                    }
+                }
+            }
+            for (projection in survivor) {
+                if (projection.novelUrl != keepRowUrl &&
+                    libraryDao.getByUrl(projection.novelUrl) != null
+                ) {
+                    libraryDao.delete(projection.novelUrl)
+                    removed++
+                }
+            }
+            workDao.deleteWork(absorbedWorkId)
+            workDao.setDefaultNovelUrl(survivingWorkId, keepRowUrl)
+        }
+        val count = workDao.projectionCount(survivingWorkId)
+        MergeOutcome.Merged(MergedInfo(keepRowUrl, removed, count))
+    }
+
+    // =====================================================================
     // SLICE-04.1b: MIGRATION
     // =====================================================================
 

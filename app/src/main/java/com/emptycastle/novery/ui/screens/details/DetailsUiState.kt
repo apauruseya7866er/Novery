@@ -118,7 +118,13 @@ data class DetailsUiState(
     // ================================================================
     // RELATED NOVELS
     // ================================================================
-    val relatedNovels: List<Novel> = emptyList()
+    val relatedNovels: List<Novel> = emptyList(),
+
+    // ================================================================
+    // SLICE-04.2: WORK PROJECTIONS (alternate sources)
+    // ================================================================
+    val workProjections: List<com.emptycastle.novery.data.local.entity.WorkProjectionEntity> = emptyList(),
+    val workDefaultUrl: String? = null
 ) {
     // ================================================================
     // COMPUTED PROPERTIES

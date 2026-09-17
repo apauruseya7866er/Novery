@@ -69,4 +69,16 @@ class WorkMigrationTest {
         assertFalse(WorkMigration.shouldMoveHistory(null, null))
         assertFalse(WorkMigration.shouldMoveHistory(null, 1000L))
     }
+
+    @Test
+    fun suggestKeepRow_furthestReadWins() {
+        assertTrue(WorkMigration.suggestKeepRow(10, 2000L, 5, 1000L))
+        assertFalse(WorkMigration.suggestKeepRow(5, 1000L, 10, 2000L))
+    }
+
+    @Test
+    fun suggestKeepRow_tieBreaksToEarlierAdded() {
+        assertTrue(WorkMigration.suggestKeepRow(7, 1000L, 7, 2000L))
+        assertFalse(WorkMigration.suggestKeepRow(7, 2000L, 7, 1000L))
+    }
 }

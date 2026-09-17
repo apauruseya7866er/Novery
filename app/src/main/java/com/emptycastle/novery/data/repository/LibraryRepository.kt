@@ -255,13 +255,17 @@ class LibraryRepository(
         if (targetTitle.isBlank()) return@withContext emptyList()
 
         // Compare normalized titles so source labels or bracketed suffixes don't hide likely duplicates.
-        libraryDao.getAll()
+        val entities = libraryDao.getAll()
             .asSequence()
             .filter { it.url != novel.url }
             .filter { normalizeDuplicateTitle(it.name) == targetTitle }
             .take(MAX_DUPLICATE_CANDIDATES)
-            .map { it.toLibraryItem() }
             .toList()
+        // Slice-04.2: attach work identity so callers can offer attach/merge.
+        val workIds = workDao?.getAllProjections()
+            ?.associate { it.novelUrl to it.workId }
+            ?: emptyMap()
+        entities.map { it.toLibraryItem(workId = workIds[it.url]) }
     }
 
     // ================================================================
