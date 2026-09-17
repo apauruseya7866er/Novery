@@ -144,7 +144,9 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 fun SettingsScreen(
     onBack: () -> Unit,
     onNavigateToStorage: () -> Unit,
-    onNavigateToFilters: () -> Unit = {}
+    onNavigateToFilters: () -> Unit = {},
+    // Slice-07.2b: translation engine settings.
+    onNavigateToTranslation: () -> Unit = {}
 ) {
     val preferencesManager = remember { RepositoryProvider.getPreferencesManager() }
     val settings by preferencesManager.appSettings.collectAsStateWithLifecycle()
@@ -577,6 +579,21 @@ fun SettingsScreen(
                         title = "Text Filters",
                         subtitle = "Remove ad text, Discord/Patreon links, and custom rules",
                         onClick = onNavigateToFilters
+                    )
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════
+            // TRANSLATION (Slice-07: MTL / bilingual reading)
+            // ═══════════════════════════════════════════════════════════
+            item { SectionHeader("Translation", Icons.Outlined.MenuBook) }
+            item {
+                SettingsCard {
+                    NavigationItem(
+                        icon = Icons.Outlined.MenuBook,
+                        title = "Translation Engine",
+                        subtitle = "Translate chapters (OpenAI-compatible API or local server)",
+                        onClick = onNavigateToTranslation
                     )
                 }
             }

@@ -23,6 +23,9 @@ sealed class NavRoutes(val route: String) {
 
     object Filters : NavRoutes("settings/filters")
 
+    // Slice-07.2b: translation engine settings.
+    object Translation : NavRoutes("settings/translation")
+
     object Notifications : NavRoutes("notifications")
 
     // ================================================================

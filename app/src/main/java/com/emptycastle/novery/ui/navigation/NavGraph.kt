@@ -25,8 +25,10 @@ import com.emptycastle.novery.ui.screens.onboarding.OnboardingScreen
 import com.emptycastle.novery.ui.screens.profile.ProfileScreen
 import com.emptycastle.novery.ui.screens.reader.ReaderScreen
 import com.emptycastle.novery.ui.screens.reader.settings.ReaderSettingsScreen
+import com.emptycastle.novery.ui.screens.settings.FiltersScreen
 import com.emptycastle.novery.ui.screens.settings.SettingsScreen
 import com.emptycastle.novery.ui.screens.settings.StorageScreen
+import com.emptycastle.novery.ui.screens.settings.TranslationSettingsScreen
 import com.emptycastle.novery.ui.screens.tagexplorer.TagExplorerScreen
 
 @Composable
@@ -141,7 +143,31 @@ fun NoveryNavGraph(
                 onBack = { navController.popBackStack() },
                 onNavigateToStorage = {
                     navController.navigate(NavRoutes.Storage.route)
+                },
+                onNavigateToFilters = {
+                    navController.navigate(NavRoutes.Filters.route)
+                },
+                onNavigateToTranslation = {
+                    navController.navigate(NavRoutes.Translation.route)
                 }
+            )
+        }
+
+        // ================================================================
+        // FILTERS
+        // ================================================================
+        composable(route = NavRoutes.Filters.route) {
+            FiltersScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // ================================================================
+        // TRANSLATION ENGINE SETTINGS (Slice-07.2b)
+        // ================================================================
+        composable(route = NavRoutes.Translation.route) {
+            TranslationSettingsScreen(
+                onBack = { navController.popBackStack() }
             )
         }
 
