@@ -141,6 +141,29 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getLong(KEY_TG_LAST_SENT_AT, 0L))
     val tgLastSentAt: StateFlow<Long> = _tgLastSentAt.asStateFlow()
 
+    // Slice-07.1b: saved feed searches.
+    private val _savedSearches =
+        MutableStateFlow(loadSavedSearches())
+    val savedSearches: StateFlow<List<com.emptycastle.novery.data.feed.SavedSearch>> =
+        _savedSearches.asStateFlow()
+
+    // Slice-07.2a: translation engine settings (API-compatible endpoint).
+    private val _translationEndpoint =
+        MutableStateFlow(prefs.getString(KEY_TRANSLATION_ENDPOINT, "") ?: "")
+    val translationEndpoint: StateFlow<String> = _translationEndpoint.asStateFlow()
+
+    private val _translationApiKey =
+        MutableStateFlow(prefs.getString(KEY_TRANSLATION_API_KEY, "") ?: "")
+    val translationApiKey: StateFlow<String> = _translationApiKey.asStateFlow()
+
+    private val _translationModel =
+        MutableStateFlow(prefs.getString(KEY_TRANSLATION_MODEL, "") ?: "")
+    val translationModel: StateFlow<String> = _translationModel.asStateFlow()
+
+    private val _translationTargetLang =
+        MutableStateFlow(prefs.getString(KEY_TRANSLATION_TARGET_LANG, "English") ?: "English")
+    val translationTargetLang: StateFlow<String> = _translationTargetLang.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -736,6 +759,84 @@ class PreferencesManager(context: Context) {
         _tgBotToken.value = ""
         _tgChatId.value = ""
         _tgLastSentAt.value = 0L
+    }
+
+    // =========================================================================
+    // SLICE-07.1b: SAVED FEED SEARCHES
+    // =========================================================================
+
+    private fun loadSavedSearches(): List<com.emptycastle.novery.data.feed.SavedSearch> {
+        val jsonString = prefs.getString(KEY_SAVED_SEARCHES, null) ?: return emptyList()
+        return try {
+            json.decodeFromString<List<com.emptycastle.novery.data.feed.SavedSearch>>(jsonString)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun persistSavedSearches(value: List<com.emptycastle.novery.data.feed.SavedSearch>) {
+        prefs.edit()
+            .putString(KEY_SAVED_SEARCHES, json.encodeToString(value))
+            .apply()
+        _savedSearches.value = value
+    }
+
+    fun addSavedSearch(query: String) {
+        persistSavedSearches(
+            com.emptycastle.novery.data.feed.SavedSearches.add(_savedSearches.value, query)
+        )
+    }
+
+    fun removeSavedSearch(id: String) {
+        persistSavedSearches(
+            com.emptycastle.novery.data.feed.SavedSearches.remove(_savedSearches.value, id)
+        )
+    }
+
+    fun clearSavedSearches() {
+        prefs.edit().remove(KEY_SAVED_SEARCHES).apply()
+        _savedSearches.value = emptyList()
+    }
+
+    // =========================================================================
+    // SLICE-07.2a: TRANSLATION ENGINE SETTINGS
+    // =========================================================================
+
+    fun setTranslationEndpoint(endpoint: String) {
+        val trimmed = endpoint.trim()
+        prefs.edit().putString(KEY_TRANSLATION_ENDPOINT, trimmed).apply()
+        _translationEndpoint.value = trimmed
+    }
+
+    fun setTranslationApiKey(key: String) {
+        prefs.edit().putString(KEY_TRANSLATION_API_KEY, key).apply()
+        _translationApiKey.value = key
+    }
+
+    fun setTranslationModel(model: String) {
+        val trimmed = model.trim()
+        prefs.edit().putString(KEY_TRANSLATION_MODEL, trimmed).apply()
+        _translationModel.value = trimmed
+    }
+
+    fun setTranslationTargetLang(lang: String) {
+        val trimmed = lang.trim().ifBlank { "English" }
+        prefs.edit().putString(KEY_TRANSLATION_TARGET_LANG, trimmed).apply()
+        _translationTargetLang.value = trimmed
+    }
+
+    private fun resetTranslationSettings() {
+        prefs.edit().apply {
+            remove(KEY_TRANSLATION_ENDPOINT)
+            remove(KEY_TRANSLATION_API_KEY)
+            remove(KEY_TRANSLATION_MODEL)
+            remove(KEY_TRANSLATION_TARGET_LANG)
+            apply()
+        }
+        _translationEndpoint.value = ""
+        _translationApiKey.value = ""
+        _translationModel.value = ""
+        _translationTargetLang.value = "English"
     }
 
     private fun resetWebdavSettings() {
@@ -1747,6 +1848,7 @@ class PreferencesManager(context: Context) {
         // Reset search history and favorite providers
         clearSearchHistory()
         clearFavoriteProviders()
+        clearSavedSearches()
 
         // Reset slice-01 scheduled library updates
         resetLibraryUpdateSettings()
@@ -1762,6 +1864,9 @@ class PreferencesManager(context: Context) {
 
         // Reset slice-06.4 Telegram settings
         resetTgSettings()
+
+        // Reset slice-07.2a translation settings
+        resetTranslationSettings()
     }
 
     /**
@@ -2007,6 +2112,11 @@ class PreferencesManager(context: Context) {
         private const val KEY_TG_BOT_TOKEN = "tg_bot_token"
         private const val KEY_TG_CHAT_ID = "tg_chat_id"
         private const val KEY_TG_LAST_SENT_AT = "tg_last_sent_at"
+        private const val KEY_SAVED_SEARCHES = "saved_feed_searches"
+        private const val KEY_TRANSLATION_ENDPOINT = "translation_endpoint"
+        private const val KEY_TRANSLATION_API_KEY = "translation_api_key"
+        private const val KEY_TRANSLATION_MODEL = "translation_model"
+        private const val KEY_TRANSLATION_TARGET_LANG = "translation_target_lang"
 
         // =====================================================================
         // APP SETTINGS KEYS

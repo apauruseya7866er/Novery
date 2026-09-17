@@ -19,6 +19,7 @@ import com.emptycastle.novery.ui.navigation.HomeTabs
 import com.emptycastle.novery.ui.navigation.rememberTabNavigationState
 import com.emptycastle.novery.ui.screens.home.shared.LibraryStateHolder
 import com.emptycastle.novery.ui.screens.home.tabs.browse.BrowseTab
+import com.emptycastle.novery.ui.screens.home.tabs.feed.FeedTab
 import com.emptycastle.novery.ui.screens.home.tabs.history.HistoryTab
 import com.emptycastle.novery.ui.screens.home.tabs.library.LibraryTab
 import com.emptycastle.novery.ui.screens.home.tabs.more.MoreTab
@@ -99,6 +100,12 @@ fun HomeScreen(
                         onNavigateToProvider = onNavigateToProviderBrowse,
                         onNavigateToDetails = onNavigateToDetails,
                         onNavigateToReader = onNavigateToReader
+                    )
+                }
+
+                composable(HomeTabs.FEED.route) {
+                    FeedTab(
+                        onNavigateToDetails = onNavigateToDetails
                     )
                 }
 

@@ -24,8 +24,10 @@ import com.emptycastle.novery.service.TTSStatus
 import com.emptycastle.novery.tts.TTSManager
 import com.emptycastle.novery.tts.VoiceInfo
 import com.emptycastle.novery.tts.VoiceManager
+import com.emptycastle.novery.ui.screens.reader.logic.BlockType
 import com.emptycastle.novery.ui.screens.reader.logic.ChapterLoadResult
 import com.emptycastle.novery.ui.screens.reader.logic.ChapterLoader
+import com.emptycastle.novery.ui.screens.reader.logic.TextProcessor
 import com.emptycastle.novery.ui.screens.reader.model.ChapterCharacterMap
 import com.emptycastle.novery.ui.screens.reader.model.ChapterContentItem
 import com.emptycastle.novery.ui.screens.reader.model.ContentSegment
@@ -39,18 +41,26 @@ import com.emptycastle.novery.ui.screens.reader.model.StableTargetScrollPosition
 import com.emptycastle.novery.ui.screens.reader.model.TTSPosition
 import com.emptycastle.novery.ui.screens.reader.model.TTSScrollEdge
 import com.emptycastle.novery.ui.screens.reader.model.TTSSettingsState
+import com.emptycastle.novery.data.translate.ApiTranslationEngine
+import com.emptycastle.novery.data.translate.TranslationManager
+import com.emptycastle.novery.ui.screens.reader.model.TranslationStatus
 import com.emptycastle.novery.util.ReadingTimeTracker
+import com.emptycastle.novery.util.SentenceParser
 import com.emptycastle.novery.util.VolumeKeyEvent
 import com.emptycastle.novery.util.VolumeKeyManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -204,6 +214,13 @@ class ReaderViewModel : ViewModel() {
     private var chapterUpdateJob: Job? = null
     private val chapterUpdateDebounceMs = 150L
 
+    // Slice-07.2c: chapter translation (translation-only mode).
+    // translatedTexts maps chapterIndex -> translated paragraph per TEXT
+    // segment ordinal. Guarded by stateMutex (same as display rebuilds).
+    private var translationJob: Job? = null
+    private val translatedTexts = mutableMapOf<Int, List<String>>()
+    private var translationManager: TranslationManager? = null
+
     // Navigation tracking
     private var lastNavigationSource: NavigationSource = NavigationSource.CONTINUE
 
@@ -266,6 +283,7 @@ class ReaderViewModel : ViewModel() {
         observeSettings()
         observeTTSState()
         observeVolumeKeys()
+        observeTextFilters()
     }
 
     private fun observeSettings() {
@@ -712,16 +730,18 @@ class ReaderViewModel : ViewModel() {
 
         state.displayItems.forEach { item ->
             if (item is ReaderDisplayItem.Segment) {
-                item.segment.sentences.forEachIndexed { sentenceIndex, sentence ->
-                    sentences.add(
-                        TTSSentenceInfo(
-                            text = sentence.text,
-                            chapterIndex = item.chapterIndex,
-                            segmentIndexInChapter = item.segmentIndexInChapter,
-                            sentenceIndexInSegment = sentenceIndex,
-                            pauseAfterMs = sentence.pauseAfterMs
+                if (item.segment.blockType != BlockType.SYSTEM_MESSAGE) {
+                    item.segment.sentences.forEachIndexed { sentenceIndex, sentence ->
+                        sentences.add(
+                            TTSSentenceInfo(
+                                text = sentence.text,
+                                chapterIndex = item.chapterIndex,
+                                segmentIndexInChapter = item.segmentIndexInChapter,
+                                sentenceIndexInSegment = sentenceIndex,
+                                pauseAfterMs = sentence.pauseAfterMs
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -863,9 +883,13 @@ class ReaderViewModel : ViewModel() {
 
                 val (currentInChapter, totalInChapter) = calculateChapterTTSProgress(currentTTSCoordinate)
 
-                val novelUrl = currentNovelUrl ?: ""
-                val providerName = currentProvider?.name ?: ""
-                val novelDetails = offlineRepository.getNovelDetails(novelUrl)
+                val novelUrl = (currentNovelUrl ?: state.currentChapterUrl).ifBlank { state.currentChapterUrl }
+                val providerName = (currentProvider?.name ?: "").ifBlank {
+                    val defaultP = novelRepository.getProviders().firstOrNull()
+                    currentProvider = defaultP
+                    defaultP?.name ?: ""
+                }
+                val novelDetails = if (novelUrl.isNotBlank()) offlineRepository.getNovelDetails(novelUrl) else null
                 val coverUrl = novelDetails?.posterUrl
                 val coverBitmap = loadCoverBitmap(coverUrl)
 
@@ -1163,6 +1187,12 @@ class ReaderViewModel : ViewModel() {
      * with the chapter loading + TTS rebuild sequence.
      */
     private fun handleTTSChapterChange(event: TTSChapterChangeEvent) {
+        if (event.chapterUrl.isBlank()) {
+            Log.w(TAG, "TTS chapter change event has blank URL (error state) — ignoring chapter load")
+            _autoAdvanceEvent.tryEmit(AutoAdvanceEvent.Failed("Failed to load next chapter"))
+            return
+        }
+
         val chapterIndex = event.chapterIndex
 
         Log.d(TAG, "TTS chapter changed to $chapterIndex")
@@ -1201,9 +1231,19 @@ class ReaderViewModel : ViewModel() {
                     }
 
                     if (!_uiState.value.loadedChapters.containsKey(chapterIndex)) {
-                        Log.e(TAG, "Failed to load chapter $chapterIndex for TTS — stopping")
-                        stopTTSInternal()
+                        Log.e(TAG, "Failed to load chapter $chapterIndex for UI display")
                         return@launch
+                    }
+                }
+
+                // If infinite scroll is disabled, prune loadedChapters so only target chapter is displayed
+                if (!_uiState.value.infiniteScrollEnabled) {
+                    val currentLoaded = _uiState.value.loadedChapters[chapterIndex]
+                    if (currentLoaded != null) {
+                        _uiState.update {
+                            it.copy(loadedChapters = mapOf(chapterIndex to currentLoaded))
+                        }
+                        rebuildDisplayItemsInternal()
                     }
                 }
 
@@ -1220,24 +1260,23 @@ class ReaderViewModel : ViewModel() {
 
                 addToHistory(event.chapterUrl, event.chapterName)
 
-                // Rebuild TTS list (this will pick up the new chapter)
+                // Rebuild TTS list for UI sentence highlight mapping
                 rebuildTTSSentenceListSafe()
 
-                // Find first sentence of new chapter
                 val firstSentenceIndex = ttsSentenceList.indexOfFirst { it.chapterIndex == chapterIndex }
                 if (firstSentenceIndex >= 0) {
                     currentTTSCoordinate = ttsSentenceList[firstSentenceIndex].coordinate
                     currentTTSSentenceText = ttsSentenceList[firstSentenceIndex].text
-
-                    Log.d(TAG, "Starting TTS at sentence $firstSentenceIndex of chapter $chapterIndex")
                     updateHighlightFromCoordinate(currentTTSCoordinate)
+                }
 
-                    val ttsContent = buildTTSContent(_uiState.value, ttsSentenceList)
-                    TTSServiceManager.updateContent(ttsContent, keepSegmentIndex = false)
-                    TTSServiceManager.seekToSegment(firstSentenceIndex)
-                } else {
-                    Log.e(TAG, "No sentences found for chapter $chapterIndex")
-                    stopTTSInternal()
+                // Scroll reader view to new chapter's header/segment
+                val targetDisplayIndex = _uiState.value.displayItems.indexOfFirst {
+                    (it is ReaderDisplayItem.ChapterHeader && it.chapterIndex == chapterIndex) ||
+                    (it is ReaderDisplayItem.Segment && it.chapterIndex == chapterIndex)
+                }
+                if (targetDisplayIndex >= 0) {
+                    _ttsShouldEnsureVisible.value = targetDisplayIndex
                 }
             } finally {
                 blockTTSSync.set(false)
@@ -1711,6 +1750,12 @@ class ReaderViewModel : ViewModel() {
                         rebuildDisplayItemsInternal()
                     }
 
+                    // Slice-07.2c: translate freshly loaded chapters while
+                    // translation mode is on (no-op otherwise).
+                    if (_uiState.value.translationEnabled) {
+                        translateChapterContent(chapterIndex)
+                    }
+
                     // FIX #3 — Re-check isTTSActive and isTTSStopping here. ttsWasActive is
                     // captured at the start of this function; if the user stopped TTS while the
                     // chapter was loading, we must NOT attempt to restore and re-seek it.
@@ -1819,7 +1864,16 @@ class ReaderViewModel : ViewModel() {
                     loadedChapter.contentItems.forEachIndexed { orderInChapter, contentItem ->
                         when (contentItem) {
                             is ChapterContentItem.Text -> {
-                                val segment = contentItem.segment
+                                val rawSegment = contentItem.segment
+                                // Slice-07.2c: substitute the translated
+                                // paragraph when translation mode is on.
+                                // segmentIndexInChapter counts TEXT segments,
+                                // matching the translation list ordinals.
+                                val segment = translatedSegment(
+                                    chapterIndex,
+                                    segmentIndexInChapter,
+                                    rawSegment
+                                )
                                 items.add(
                                     ReaderDisplayItem.Segment(
                                         chapterIndex = chapterIndex,
@@ -1923,6 +1977,243 @@ class ReaderViewModel : ViewModel() {
                 displayItems = items,
                 currentChapterWordCount = currentChapterWordCount
             )
+        }
+    }
+
+    /**
+     * Re-filter instantly when text-filter rules change (hide sentence / undo /
+     * toggling rules in Settings → Filters) so the reader updates without
+     * going back and reopening. Skips the initial snapshot; debounced for
+     * rapid hide/undo taps.
+     */
+    private fun observeTextFilters() {
+        viewModelScope.launch {
+            try {
+                RepositoryProvider.getTextFilterManager().rules
+                    .drop(1)
+                    .debounce(300)
+                    .collect { refreshContentForFilterChange() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error observing text filters", e)
+            }
+        }
+    }
+
+    /**
+     * Re-parse loaded chapters' cached HTML with the current filter rules and
+     * rebuild display items. No network involved. Scroll position is preserved
+     * via stable item keys; the TTS queue is rebuilt from the new items so a
+     * hidden sentence disappears instantly and is never spoken (active
+     * playback seeks to the restored position).
+     */
+    private fun refreshContentForFilterChange() {
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val didRefresh = stateMutex.withLock {
+                    val state = _uiState.value
+                    if (state.loadedChapters.isEmpty() || isTransitioning.get()) {
+                        return@withLock false
+                    }
+                    var changed = false
+                    val updated = state.loadedChapters.mapValues { (chapterIndex, loaded) ->
+                        if (loaded.rawHtml.isBlank() || loaded.isLoading || loaded.error != null) {
+                            loaded
+                        } else {
+                            changed = true
+                            val reparsed = TextProcessor.parseHtmlToOrderedContent(loaded.rawHtml)
+                            characterMaps[chapterIndex] = ChapterCharacterMap.build(
+                                reparsed.filterIsInstance<ChapterContentItem.Text>().map { it.segment },
+                                chapterIndex
+                            )
+                            loaded.copy(contentItems = reparsed)
+                        }
+                    }
+                    if (!changed) return@withLock false
+                    _uiState.update { it.copy(loadedChapters = updated) }
+                    rebuildDisplayItemsInternal()
+                    true
+                }
+                if (didRefresh) {
+                    // Same pattern as chapter loads: rebuild the TTS queue
+                    // outside stateMutex; it restores position and pushes the
+                    // new (filtered) content to the service when active.
+                    ttsRebuildMutex.withLock {
+                        rebuildTTSSentenceListInternal()
+                    }
+                    Log.d(TAG, "Refreshed content for filter change")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error refreshing content for filter change", e)
+            }
+        }
+    }
+
+    // =========================================================================
+    // SLICE-07.2c: CHAPTER TRANSLATION (translation-only mode)
+    // =========================================================================
+    //
+    // Translated paragraphs substitute segment text/sentences at display
+    // build time, so highlight, scroll, filters and the TTS queue all
+    // follow automatically. Bilingual mode is a follow-up.
+
+    fun toggleTranslation() {
+        if (_uiState.value.translationEnabled) {
+            disableTranslation()
+            return
+        }
+        val prefs = preferencesManager
+        val engine = ApiTranslationEngine(
+            endpoint = prefs.translationEndpoint.value,
+            apiKey = prefs.translationApiKey.value,
+            model = prefs.translationModel.value
+        )
+        if (!engine.isConfigured()) {
+            _uiState.update {
+                it.copy(
+                    translationStatus = TranslationStatus.FAILED,
+                    translationError = "Configure translation in Settings → Translation"
+                )
+            }
+            return
+        }
+        val targetLang = prefs.translationTargetLang.value
+        val manager = TranslationManager(engine).also { translationManager = it }
+
+        translationJob?.cancel()
+        translationJob = viewModelScope.launch(Dispatchers.Default) {
+            _uiState.update {
+                it.copy(translationStatus = TranslationStatus.WORKING, translationError = null)
+            }
+            try {
+                // Snapshot chapters without holding the mutex over network.
+                val chapters = stateMutex.withLock {
+                    _uiState.value.loadedChapters.toSortedMap()
+                }
+                for ((chapterIndex, loaded) in chapters) {
+                    ensureActive()
+                    if (loaded.isLoading || loaded.error != null) continue
+                    val texts = loaded.segments.map { it.text }
+                    if (texts.isEmpty()) continue
+                    val translated = manager.translateChapter(texts, "auto", targetLang)
+                    stateMutex.withLock {
+                        translatedTexts[chapterIndex] = translated
+                    }
+                }
+                stateMutex.withLock {
+                    _uiState.update {
+                        it.copy(
+                            translationEnabled = true,
+                            translationStatus = TranslationStatus.READY
+                        )
+                    }
+                    rebuildDisplayItemsInternal()
+                }
+                ttsRebuildMutex.withLock {
+                    rebuildTTSSentenceListInternal()
+                }
+                Log.d(TAG, "Translation enabled ($targetLang)")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Translation failed", e)
+                _uiState.update {
+                    it.copy(
+                        translationStatus = TranslationStatus.FAILED,
+                        translationError = e.message ?: "Translation failed"
+                    )
+                }
+            }
+        }
+    }
+
+    fun disableTranslation() {
+        translationJob?.cancel()
+        translationJob = null
+        viewModelScope.launch {
+            stateMutex.withLock {
+                translatedTexts.clear()
+                _uiState.update {
+                    it.copy(
+                        translationEnabled = false,
+                        translationStatus = TranslationStatus.OFF,
+                        translationError = null
+                    )
+                }
+                rebuildDisplayItemsInternal()
+            }
+            ttsRebuildMutex.withLock {
+                rebuildTTSSentenceListInternal()
+            }
+        }
+    }
+
+    fun clearTranslationError() {
+        _uiState.update {
+            if (it.translationStatus == TranslationStatus.FAILED) {
+                it.copy(translationStatus = TranslationStatus.OFF, translationError = null)
+            } else it
+        }
+    }
+
+    /**
+     * Translates a freshly loaded chapter while translation mode is on
+     * (called after its initial build; no-op otherwise).
+     */
+    private fun translateChapterContent(chapterIndex: Int) {
+        val manager = translationManager ?: return
+        if (!_uiState.value.translationEnabled) return
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val loaded = stateMutex.withLock {
+                    _uiState.value.loadedChapters[chapterIndex]
+                } ?: return@launch
+                if (loaded.isLoading || loaded.error != null) return@launch
+                if (loaded.segments.isEmpty()) return@launch
+                if (stateMutex.withLock { translatedTexts.containsKey(chapterIndex) }) {
+                    return@launch
+                }
+                val targetLang = preferencesManager.translationTargetLang.value
+                val translated = manager.translateChapter(
+                    loaded.segments.map { it.text }, "auto", targetLang
+                )
+                stateMutex.withLock {
+                    // The user may have toggled off mid-flight.
+                    if (!_uiState.value.translationEnabled) return@withLock
+                    translatedTexts[chapterIndex] = translated
+                    rebuildDisplayItemsInternal()
+                }
+                ttsRebuildMutex.withLock {
+                    rebuildTTSSentenceListInternal()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "translateChapterContent failed for $chapterIndex", e)
+            }
+        }
+    }
+
+    /**
+     * Substitutes a translated paragraph for a segment. Must be called
+     * under stateMutex (reads translatedTexts).
+     */
+    private fun translatedSegment(
+        chapterIndex: Int,
+        textOrdinal: Int,
+        segment: ContentSegment
+    ): ContentSegment {
+        if (!_uiState.value.translationEnabled) return segment
+        val translated = translatedTexts[chapterIndex]?.getOrNull(textOrdinal)
+            ?: return segment
+        if (translated.isBlank() || translated == segment.text) return segment
+        return try {
+            segment.copy(
+                text = translated,
+                styledText = AnnotatedString(translated),
+                sentences = SentenceParser.parse(translated).sentences
+            )
+        } catch (_: Exception) {
+            segment
         }
     }
 
@@ -2135,6 +2426,10 @@ class ReaderViewModel : ViewModel() {
         }
 
         val state = _uiState.value
+        if (state.isTTSActive && state.currentTTSChapterIndex >= 0 && chapterIndex != state.currentTTSChapterIndex) {
+            return
+        }
+
         if (state.currentChapterIndex != chapterIndex) {
             val loadedChapter = state.loadedChapters[chapterIndex]
             val wordCount = loadedChapter?.segments?.sumOf { segment ->

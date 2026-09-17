@@ -79,6 +79,7 @@ data class LoadedChapter(
     val chapter: Chapter,
     val chapterIndex: Int,
     val contentItems: List<ChapterContentItem> = emptyList(),
+    val rawHtml: String = "",
     val isLoading: Boolean = false,
     val isFromCache: Boolean = false,
     val error: String? = null
@@ -108,6 +109,16 @@ data class LoadedChapter(
 // =============================================================================
 // TTS STATE - UPDATED
 // =============================================================================
+
+/**
+ * Slice-07.2c: chapter translation state.
+ */
+enum class TranslationStatus {
+    OFF,
+    WORKING,
+    READY,
+    FAILED
+}
 
 /**
  * Bounds of a sentence relative to its parent segment/paragraph
@@ -234,7 +245,13 @@ data class ReaderUiState(
     val ttsSettings: TTSSettingsState = TTSSettingsState(),
 
     // Track which edge the sentence was last at for flip behavior
-    val lastTTSScrollEdge: TTSScrollEdge = TTSScrollEdge.NONE
+    val lastTTSScrollEdge: TTSScrollEdge = TTSScrollEdge.NONE,
+
+    // Slice-07.2c: chapter translation (translation-only mode; TTS follows
+    // the displayed translated segments automatically).
+    val translationEnabled: Boolean = false,
+    val translationStatus: TranslationStatus = TranslationStatus.OFF,
+    val translationError: String? = null
 ) {
     val shouldShowLoadingOverlay: Boolean
         get() = isLoading || !isContentReady || pendingScrollReset
