@@ -6,8 +6,10 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.emptycastle.novery.data.local.entity.UpdateDetectionEntity
+import com.emptycastle.novery.data.repository.LibraryItem
 import com.emptycastle.novery.data.repository.LibraryRefreshResult
 import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.service.LibraryUpdateNotifier
 
 /**
  * Slice-01: scheduled library update worker.
@@ -71,19 +73,25 @@ class LibraryUpdateWorker(
             }
 
             var notified = 0
-            libraryRepository.getLibrary()
-                .filter { it.hasNewChapters }
-                .forEach { item ->
-                    try {
-                        notificationRepository.addOrUpdateNotification(
-                            item.novel.url,
-                            item.novel.apiName
-                        )
-                        notified++
-                    } catch (e: Exception) {
-                        Log.w(TAG, "LibraryUpdate: notify failed for ${item.novel.url}", e)
-                    }
+            val withNew = libraryRepository.getLibrary().filter { it.hasNewChapters }
+            withNew.forEach { item ->
+                try {
+                    notificationRepository.addOrUpdateNotification(
+                        item.novel.url,
+                        item.novel.apiName
+                    )
+                    notified++
+                } catch (e: Exception) {
+                    Log.w(TAG, "LibraryUpdate: notify failed for ${item.novel.url}", e)
                 }
+            }
+
+            // Slice-05.2: system notification on findings. Manual runs
+            // notify too — the user asked to check, and the summary is
+            // the result delivery.
+            if (result.totalNewChapters > 0) {
+                notifySystem(withNew)
+            }
 
             Log.i(
                 TAG,
@@ -100,6 +108,18 @@ class LibraryUpdateWorker(
         } catch (e: Exception) {
             Log.e(TAG, "LibraryUpdate failed", e)
             if (runAttemptCount < 3) Result.retry() else Result.failure()
+        }
+    }
+
+    /**
+     * Slice-05.2: posts the system notification. Isolated so notification
+     * failures can never fail the worker.
+     */
+    private suspend fun notifySystem(withNew: List<LibraryItem>) {
+        try {
+            LibraryUpdateNotifier.notifyUpdates(applicationContext, withNew)
+        } catch (e: Exception) {
+            Log.w(TAG, "LibraryUpdate: system notification failed", e)
         }
     }
 

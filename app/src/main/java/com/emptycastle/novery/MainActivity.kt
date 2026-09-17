@@ -45,10 +45,13 @@ import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
 import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.data.update.StartupUpdateChecker
+import com.emptycastle.novery.service.LibraryUpdateNotifier
 import com.emptycastle.novery.service.TTSNotifications
 import com.emptycastle.novery.ui.components.MarkdownText
 import com.emptycastle.novery.ui.components.SplashScreen
 import com.emptycastle.novery.ui.navigation.NoveryNavGraph
+import com.emptycastle.novery.ui.navigation.NavRoutes
+import com.emptycastle.novery.ui.navigation.NovelDeepLink
 import com.emptycastle.novery.ui.theme.NoveryTheme
 import com.emptycastle.novery.util.AppLoadState
 import com.emptycastle.novery.util.VolumeKeyManager
@@ -82,6 +85,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             StartupUpdateChecker.checkOnStartup(applicationContext)
         }
+
+        // Slice-05.2: route notification deep links (cold start).
+        handleNovelDeepLink(intent)
 
         setContent {
             val preferencesManager = remember { RepositoryProvider.getPreferencesManager() }
@@ -117,6 +123,23 @@ class MainActivity : ComponentActivity() {
                         } else {
                             val navController = rememberNavController()
                             val context = LocalContext.current
+
+                            // Slice-05.2: consume notification deep links.
+                            val deepLink by NovelDeepLink.link.collectAsStateWithLifecycle()
+                            LaunchedEffect(deepLink) {
+                                deepLink?.let { target ->
+                                    try {
+                                        navController.navigate(
+                                            NavRoutes.Details.createRoute(
+                                                target.novelUrl,
+                                                target.providerName
+                                            )
+                                        )
+                                    } catch (_: Exception) {
+                                    }
+                                    NovelDeepLink.consume()
+                                }
+                            }
 
                             var showNotificationDialog by remember {
                                 mutableStateOf(
@@ -174,6 +197,26 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Slice-05.2: route notification deep links (warm start).
+        handleNovelDeepLink(intent)
+    }
+
+    /**
+     * Slice-05.2: posts notification novel intents for the composition to
+     * consume by navigating to details.
+     */
+    private fun handleNovelDeepLink(intent: Intent?) {
+        if (intent?.action != LibraryUpdateNotifier.ACTION_OPEN_NOVEL) return
+        val novelUrl = intent.getStringExtra(LibraryUpdateNotifier.EXTRA_NOVEL_URL)
+        val provider = intent.getStringExtra(LibraryUpdateNotifier.EXTRA_PROVIDER_NAME)
+        if (!novelUrl.isNullOrBlank() && !provider.isNullOrBlank()) {
+            NovelDeepLink.post(novelUrl, provider)
         }
     }
 

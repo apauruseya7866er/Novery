@@ -84,6 +84,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Slice-05.2: library update notification actions (mark as read) -->
+        <receiver
+            android:name=".service.UpdateActionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.emptycastle.novery.action.UPDATE_MARK_READ" />
+            </intent-filter>
+        </receiver>
+
         <!-- File Provider -->
         <provider
             android:name="androidx.core.content.FileProvider"

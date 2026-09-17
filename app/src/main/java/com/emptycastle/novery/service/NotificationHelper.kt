@@ -19,6 +19,8 @@ object NotificationHelper {
     const val CHANNEL_DOWNLOAD = "novery_download_channel"
     const val CHANNEL_DOWNLOAD_COMPLETE = "novery_download_complete_channel"
     const val CHANNEL_TTS = "novery_tts_channel"
+    // Slice-05.2: background library update notifications.
+    const val CHANNEL_LIBRARY_UPDATES = "novery_library_updates_channel"
 
     // ID ranges to avoid collisions:
     // 1001 = preparing/initial notification
@@ -107,8 +109,18 @@ object NotificationHelper {
                 setSound(null, null)
             }
 
+            // Slice-05.2: background library update notifications.
+            val libraryUpdatesChannel = NotificationChannel(
+                CHANNEL_LIBRARY_UPDATES,
+                "Library Updates",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Notifies when new chapters are found"
+                setShowBadge(true)
+            }
+
             notificationManager.createNotificationChannels(
-                listOf(downloadChannel, downloadCompleteChannel, ttsChannel)
+                listOf(downloadChannel, downloadCompleteChannel, ttsChannel, libraryUpdatesChannel)
             )
         }
     }
