@@ -25,14 +25,45 @@ data class BackupData(
 
     // Settings
     val appSettings: AppSettingsBackup? = null,
-    val readerSettings: ReaderSettingsBackup? = null
+    val readerSettings: ReaderSettingsBackup? = null,
+
+    // Slice-06.1 (backup v2): work identities + text filter rules.
+    val works: List<WorkBackup> = emptyList(),
+    val textFilters: List<TextFilterBackup> = emptyList()
 ) {
     companion object {
-        const val CURRENT_VERSION = 1
+        const val CURRENT_VERSION = 2
         const val FILE_EXTENSION = "novery"
         const val MIME_TYPE = "application/json"
     }
 }
+
+/**
+ * Slice-06.1: one work with its attached projections.
+ * Work ids are local-only; restore re-creates them and maps by novelUrl.
+ */
+@Serializable
+data class WorkBackup(
+    val defaultNovelUrl: String? = null,
+    val projections: List<WorkProjectionBackup> = emptyList()
+)
+
+@Serializable
+data class WorkProjectionBackup(
+    val novelUrl: String,
+    val providerName: String
+)
+
+/**
+ * Slice-06.1: one custom text-filter rule.
+ */
+@Serializable
+data class TextFilterBackup(
+    val pattern: String,
+    val isRegex: Boolean = true,
+    val label: String = "",
+    val isEnabled: Boolean = true
+)
 
 @Serializable
 data class LibraryBackup(
@@ -215,6 +246,9 @@ data class RestoreOptions(
     val restoreHistory: Boolean = true,
     val restoreStatistics: Boolean = true,
     val restoreSettings: Boolean = true,
+    // Slice-06.1: work identities + filter rules.
+    val restoreWorks: Boolean = true,
+    val restoreTextFilters: Boolean = true,
     val mergeWithExisting: Boolean = true // If false, clears existing data first
 )
 
@@ -229,7 +263,10 @@ data class RestoreResult(
     val historyRestored: Int = 0,
     val readChaptersRestored: Int = 0,
     val statsRestored: Int = 0,
-    val settingsRestored: Boolean = false
+    val settingsRestored: Boolean = false,
+    // Slice-06.1
+    val worksRestored: Int = 0,
+    val textFiltersRestored: Int = 0
 ) {
     val totalItemsRestored: Int
         get() = libraryRestored + bookmarksRestored + historyRestored + readChaptersRestored + statsRestored
@@ -249,7 +286,12 @@ data class BackupMetadata(
     val readChaptersCount: Int = 0,
     val hasSettings: Boolean,
     val hasStatistics: Boolean,
-    val sourceApp: String = "Novery" // "Novery" or "QuickNovel"
+    val sourceApp: String = "Novery", // "Novery" or "QuickNovel"
+    // Slice-06.1
+    val worksCount: Int = 0,
+    val textFiltersCount: Int = 0,
+    /** Null = not a checksummed envelope (legacy/QuickNovel). */
+    val checksumValid: Boolean? = null
 ) {
     val isQuickNovelBackup: Boolean
         get() = sourceApp == "QuickNovel"

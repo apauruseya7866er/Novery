@@ -53,4 +53,10 @@ interface WorkDao {
 
     @Query("DELETE FROM work_projections WHERE id = :id")
     suspend fun deleteProjection(id: Long)
+
+    @Query("DELETE FROM work_projections")
+    suspend fun deleteAllProjections()
+
+    @Query("DELETE FROM works")
+    suspend fun deleteAllWorks()
 }

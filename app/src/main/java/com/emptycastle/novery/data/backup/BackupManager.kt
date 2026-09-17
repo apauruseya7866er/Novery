@@ -71,6 +71,7 @@ class BackupManager(
         val bookmarkDao = database.bookmarkDao()
         val historyDao = database.historyDao()
         val statsDao = database.statsDao()
+        val workDao = database.workDao()
 
         BackupData(
             version = BackupData.CURRENT_VERSION,
@@ -84,16 +85,67 @@ class BackupManager(
             readingStats = statsDao.getAllStats().map { it.toBackup() },
             readingStreak = statsDao.getStreak()?.toBackup(),
             appSettings = preferencesManager.appSettings.value.toBackup(),
-            readerSettings = preferencesManager.readerSettings.value.toBackup()
+            readerSettings = preferencesManager.readerSettings.value.toBackup(),
+            // Slice-06.1: work identities + custom filter rules.
+            works = buildWorksBackup(workDao),
+            textFilters = buildTextFiltersBackup()
         )
     }
 
+    private suspend fun buildWorksBackup(
+        workDao: com.emptycastle.novery.data.local.dao.WorkDao
+    ): List<WorkBackup> {
+        return try {
+            val projections = workDao.getAllProjections()
+            projections.groupBy { it.workId }.mapNotNull { (workId, rows) ->
+                if (rows.isEmpty()) return@mapNotNull null
+                val work = try {
+                    workDao.getWork(workId)
+                } catch (_: Exception) {
+                    null
+                }
+                WorkBackup(
+                    defaultNovelUrl = work?.defaultNovelUrl
+                        ?: rows.firstOrNull()?.novelUrl,
+                    projections = rows.map {
+                        WorkProjectionBackup(
+                            novelUrl = it.novelUrl,
+                            providerName = it.providerName
+                        )
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("BackupManager", "works backup failed", e)
+            emptyList()
+        }
+    }
+
+    private fun buildTextFiltersBackup(): List<TextFilterBackup> {
+        return try {
+            com.emptycastle.novery.util.TextFilterManager(preferencesManager)
+                .getFilters()
+                .filter { !it.isBuiltin }
+                .map {
+                    TextFilterBackup(
+                        pattern = it.pattern,
+                        isRegex = it.isRegex,
+                        label = it.label,
+                        isEnabled = it.isEnabled
+                    )
+                }
+        } catch (e: Exception) {
+            android.util.Log.w("BackupManager", "text filter backup failed", e)
+            emptyList()
+        }
+    }
+
     /**
-     * Export backup to JSON string
+     * Export backup to JSON string (v2 checksummed envelope).
      */
     suspend fun exportToJson(): String = withContext(Dispatchers.IO) {
         val backup = createBackup()
-        json.encodeToString(backup)
+        json.encodeToString(BackupIntegrity.wrap(backup))
     }
 
     /**
@@ -151,22 +203,50 @@ class BackupManager(
                 ))
             }
 
-            // Regular Novery backup
-            val backup = json.decodeFromString<BackupData>(backupJson)
-
-            Result.success(BackupMetadata(
-                version = backup.version,
-                createdAt = backup.createdAt,
-                appVersion = backup.appVersion,
-                deviceInfo = backup.deviceInfo,
-                libraryCount = backup.library.size,
-                bookmarkCount = backup.bookmarks.size,
-                historyCount = backup.history.size,
-                readChaptersCount = backup.readChapters.size,
-                hasSettings = backup.appSettings != null,
-                hasStatistics = backup.readingStats.isNotEmpty() || backup.readingStreak != null,
-                sourceApp = "Novery"
-            ))
+            // Regular Novery backup: v2 envelope (verified) or v1 bare (legacy).
+            when (val unwrapped = BackupIntegrity.unwrap(backupJson)) {
+                is BackupIntegrity.Unwrapped.Corrupt -> {
+                    return@withContext Result.failure(Exception(unwrapped.reason))
+                }
+                is BackupIntegrity.Unwrapped.Valid -> {
+                    val backup = unwrapped.backup
+                    Result.success(BackupMetadata(
+                        version = backup.version,
+                        createdAt = backup.createdAt,
+                        appVersion = backup.appVersion,
+                        deviceInfo = backup.deviceInfo,
+                        libraryCount = backup.library.size,
+                        bookmarkCount = backup.bookmarks.size,
+                        historyCount = backup.history.size,
+                        readChaptersCount = backup.readChapters.size,
+                        hasSettings = backup.appSettings != null,
+                        hasStatistics = backup.readingStats.isNotEmpty() || backup.readingStreak != null,
+                        sourceApp = "Novery",
+                        worksCount = backup.works.size,
+                        textFiltersCount = backup.textFilters.size,
+                        checksumValid = true
+                    ))
+                }
+                is BackupIntegrity.Unwrapped.Legacy -> {
+                    val backup = unwrapped.backup
+                    Result.success(BackupMetadata(
+                        version = backup.version,
+                        createdAt = backup.createdAt,
+                        appVersion = backup.appVersion,
+                        deviceInfo = backup.deviceInfo,
+                        libraryCount = backup.library.size,
+                        bookmarkCount = backup.bookmarks.size,
+                        historyCount = backup.history.size,
+                        readChaptersCount = backup.readChapters.size,
+                        hasSettings = backup.appSettings != null,
+                        hasStatistics = backup.readingStats.isNotEmpty() || backup.readingStreak != null,
+                        sourceApp = "Novery",
+                        worksCount = backup.works.size,
+                        textFiltersCount = backup.textFilters.size,
+                        checksumValid = null
+                    ))
+                }
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -192,7 +272,16 @@ class BackupManager(
                 if (quickNovelConverter.isQuickNovelBackup(backupJson)) {
                     quickNovelConverter.convert(backupJson)
                 } else {
-                    json.decodeFromString<BackupData>(backupJson)
+                    when (val unwrapped = BackupIntegrity.unwrap(backupJson)) {
+                        is BackupIntegrity.Unwrapped.Corrupt -> {
+                            return@withContext RestoreResult(
+                                success = false,
+                                error = unwrapped.reason
+                            )
+                        }
+                        is BackupIntegrity.Unwrapped.Valid -> unwrapped.backup
+                        is BackupIntegrity.Unwrapped.Legacy -> unwrapped.backup
+                    }
                 }
             } catch (e: Exception) {
                 return@withContext RestoreResult(
@@ -230,7 +319,16 @@ class BackupManager(
             val backup = if (quickNovelConverter.isQuickNovelBackup(backupJson)) {
                 quickNovelConverter.convert(backupJson)
             } else {
-                json.decodeFromString<BackupData>(backupJson)
+                when (val unwrapped = BackupIntegrity.unwrap(backupJson)) {
+                    is BackupIntegrity.Unwrapped.Corrupt -> {
+                        return@withContext RestoreResult(
+                            success = false,
+                            error = unwrapped.reason
+                        )
+                    }
+                    is BackupIntegrity.Unwrapped.Valid -> unwrapped.backup
+                    is BackupIntegrity.Unwrapped.Legacy -> unwrapped.backup
+                }
             }
             restoreBackup(backup, options)
         } catch (e: Exception) {
@@ -256,6 +354,8 @@ class BackupManager(
         var readChaptersCount = 0
         var statsCount = 0
         var settingsRestored = false
+        var worksRestored = 0
+        var textFiltersRestored = 0
 
         return try {
             // Clear existing data if not merging
@@ -349,6 +449,88 @@ class BackupManager(
                 settingsRestored = true
             }
 
+            // Slice-06.1: restore work identities. Merge-aware: works whose
+            // urls are all already attached are skipped; missing urls join
+            // the first already-attached work instead of duplicating.
+            if (options.restoreWorks && backup.works.isNotEmpty()) {
+                val workDao = database.workDao()
+                if (!options.mergeWithExisting) {
+                    workDao.deleteAllProjections()
+                    workDao.deleteAllWorks()
+                }
+                for (workBackup in backup.works) {
+                    if (workBackup.projections.isEmpty()) continue
+                    val attachedWorkId = workBackup.projections
+                        .mapNotNull { workDao.getProjectionByUrl(it.novelUrl)?.workId }
+                        .firstOrNull()
+                    if (attachedWorkId != null && options.mergeWithExisting) {
+                        var joined = false
+                        for (projection in workBackup.projections) {
+                            if (workDao.getProjectionByUrl(projection.novelUrl) == null) {
+                                workDao.insertProjection(
+                                    com.emptycastle.novery.data.local.entity.WorkProjectionEntity(
+                                        workId = attachedWorkId,
+                                        novelUrl = projection.novelUrl,
+                                        providerName = projection.providerName
+                                    )
+                                )
+                                joined = true
+                            }
+                        }
+                        if (joined) worksRestored++
+                        continue
+                    }
+                    val newId = workDao.insertWork(
+                        com.emptycastle.novery.data.local.entity.WorkEntity(
+                            defaultNovelUrl = workBackup.defaultNovelUrl
+                        )
+                    )
+                    for (projection in workBackup.projections) {
+                        if (workDao.getProjectionByUrl(projection.novelUrl) == null) {
+                            workDao.insertProjection(
+                                com.emptycastle.novery.data.local.entity.WorkProjectionEntity(
+                                    workId = newId,
+                                    novelUrl = projection.novelUrl,
+                                    providerName = projection.providerName
+                                )
+                            )
+                        }
+                    }
+                    worksRestored++
+                }
+            }
+
+            // Slice-06.1: restore custom text-filter rules, skipping exact
+            // duplicates already present.
+            if (options.restoreTextFilters && backup.textFilters.isNotEmpty()) {
+                val filterManager =
+                    com.emptycastle.novery.util.TextFilterManager(preferencesManager)
+                if (!options.mergeWithExisting) {
+                    filterManager.getFilters()
+                        .filter { !it.isBuiltin }
+                        .forEach { filterManager.removeRule(it.id) }
+                }
+                val existing = filterManager.getFilters()
+                    .map { it.pattern to it.isRegex }
+                    .toMutableSet()
+                for (rule in backup.textFilters) {
+                    if (rule.pattern.isBlank()) continue
+                    if ((rule.pattern to rule.isRegex) in existing) continue
+                    val created = try {
+                        filterManager.addCustomRule(rule.pattern, rule.isRegex, rule.label)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (created != null) {
+                        existing.add(rule.pattern to rule.isRegex)
+                        if (!rule.isEnabled) {
+                            filterManager.setEnabled(created.id, false)
+                        }
+                        textFiltersRestored++
+                    }
+                }
+            }
+
             RestoreResult(
                 success = true,
                 libraryRestored = libraryCount,
@@ -356,7 +538,9 @@ class BackupManager(
                 historyRestored = historyCount,
                 readChaptersRestored = readChaptersCount,
                 statsRestored = statsCount,
-                settingsRestored = settingsRestored
+                settingsRestored = settingsRestored,
+                worksRestored = worksRestored,
+                textFiltersRestored = textFiltersRestored
             )
         } catch (e: Exception) {
             RestoreResult(
@@ -366,7 +550,9 @@ class BackupManager(
                 bookmarksRestored = bookmarkCount,
                 historyRestored = historyCount,
                 readChaptersRestored = readChaptersCount,
-                statsRestored = statsCount
+                statsRestored = statsCount,
+                worksRestored = worksRestored,
+                textFiltersRestored = textFiltersRestored
             )
         }
     }

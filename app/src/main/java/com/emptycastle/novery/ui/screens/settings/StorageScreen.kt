@@ -74,12 +74,20 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.emptycastle.novery.data.backup.BackupScheduler
+import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.sync.SyncMeta
+import com.emptycastle.novery.data.sync.WebDavClient
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -158,6 +166,44 @@ fun StorageScreen(
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showClearNovelDialog by remember { mutableStateOf<NovelDownloadInfo?>(null) }
 
+    // Slice-06.2: auto-backup state.
+    val context = LocalContext.current
+    val preferencesManager = remember { RepositoryProvider.getPreferencesManager() }
+    val backupAutoEnabled by preferencesManager.backupAutoEnabled.collectAsStateWithLifecycle()
+    val backupAutoIntervalHours by preferencesManager.backupAutoIntervalHours.collectAsStateWithLifecycle()
+    val backupLastAutoAt by preferencesManager.backupLastAutoAt.collectAsStateWithLifecycle()
+    // Slice-06.3: WebDAV state.
+    val webdavUrl by preferencesManager.webdavUrl.collectAsStateWithLifecycle()
+    val webdavUser by preferencesManager.webdavUser.collectAsStateWithLifecycle()
+    val webdavPass by preferencesManager.webdavPass.collectAsStateWithLifecycle()
+    val webdavLastSyncAt by preferencesManager.webdavLastSyncAt.collectAsStateWithLifecycle()
+    var webdavStatus by remember { mutableStateOf<String?>(null) }
+    var webdavBusy by remember { mutableStateOf(false) }
+    var webdavRemote by remember { mutableStateOf<SyncMeta?>(null) }
+    // Slice-06.4: Telegram state.
+    val tgBotToken by preferencesManager.tgBotToken.collectAsStateWithLifecycle()
+    val tgChatId by preferencesManager.tgChatId.collectAsStateWithLifecycle()
+    val tgLastSentAt by preferencesManager.tgLastSentAt.collectAsStateWithLifecycle()
+    var tgStatus by remember { mutableStateOf<String?>(null) }
+    var tgBusy by remember { mutableStateOf(false) }
+
+    fun webdavConfig() = WebDavClient.Config(
+        baseUrl = webdavUrl,
+        username = webdavUser,
+        password = webdavPass
+    )
+
+    fun deviceId(): String {
+        return try {
+            android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID
+            ) ?: "unknown-device"
+        } catch (_: Exception) {
+            "unknown-device"
+        }
+    }
+
     // Sorted downloads
     val sortedDownloads = remember(novelDownloads, downloadSortOrder) {
         when (downloadSortOrder) {
@@ -171,12 +217,14 @@ fun StorageScreen(
     // Auto-initialize restore options when metadata is loaded
     LaunchedEffect(backupMetadata) {
         backupMetadata?.let { meta ->
-            restoreOptions = RestoreOptions(
-                restoreLibrary = meta.libraryCount > 0,
-                restoreBookmarks = meta.bookmarkCount > 0,
-                restoreHistory = meta.historyCount > 0,
-                restoreStatistics = meta.hasStatistics,
-                restoreSettings = meta.hasSettings,
+                restoreOptions = RestoreOptions(
+                    restoreLibrary = meta.libraryCount > 0,
+                    restoreBookmarks = meta.bookmarkCount > 0,
+                    restoreHistory = meta.historyCount > 0,
+                    restoreStatistics = meta.hasStatistics,
+                    restoreSettings = meta.hasSettings,
+                    restoreWorks = meta.worksCount > 0,
+                    restoreTextFilters = meta.textFiltersCount > 0,
                 mergeWithExisting = true
             )
         }
@@ -289,6 +337,220 @@ fun StorageScreen(
                         restoreLauncher.launch(
                             arrayOf(BackupData.MIME_TYPE, "application/json", "*/*")
                         )
+                    }
+                )
+            }
+
+            // Slice-06.2: scheduled auto-backup.
+            item(key = "auto_backup_card") {
+                AutoBackupCard(
+                    enabled = backupAutoEnabled,
+                    intervalHours = backupAutoIntervalHours,
+                    lastBackupAt = backupLastAutoAt,
+                    onEnabledChange = {
+                        preferencesManager.setBackupAutoEnabled(it)
+                        BackupScheduler.apply(
+                            context, it, backupAutoIntervalHours
+                        )
+                    },
+                    onIntervalChange = { hours ->
+                        preferencesManager.setBackupAutoIntervalHours(hours)
+                        BackupScheduler.apply(context, true, hours)
+                    },
+                    onBackupNow = {
+                        BackupScheduler.runNow(context)
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Backup started in background")
+                        }
+                    }
+                )
+            }
+
+            // Slice-06.3: WebDAV cloud sync (self-hosted or free providers).
+            item(key = "webdav_card") {
+                WebDavCard(
+                    url = webdavUrl,
+                    username = webdavUser,
+                    password = webdavPass,
+                    lastSyncAt = webdavLastSyncAt,
+                    remote = webdavRemote,
+                    status = webdavStatus,
+                    busy = webdavBusy,
+                    onUrlChange = { preferencesManager.setWebdavUrl(it) },
+                    onUsernameChange = { preferencesManager.setWebdavUser(it) },
+                    onPasswordChange = { preferencesManager.setWebdavPass(it) },
+                    onTest = {
+                        webdavBusy = true
+                        webdavStatus = "Testing connection…"
+                        scope.launch {
+                            try {
+                                val config = webdavConfig()
+                                if (!config.isComplete()) {
+                                    webdavStatus = "Enter server URL and username first"
+                                    return@launch
+                                }
+                                val probe = "novery-probe-${System.currentTimeMillis()}".toByteArray()
+                                val put = WebDavClient.putBytes(config, "novery-probe.txt", probe)
+                                if (put.isFailure) {
+                                    webdavStatus = "Failed: ${put.exceptionOrNull()?.message}"
+                                    return@launch
+                                }
+                                val got = WebDavClient.getBytes(config, "novery-probe.txt")
+                                webdavStatus = if (got.isSuccess && got.getOrNull()?.contentEquals(probe) == true) {
+                                    "Connection OK — server is writable"
+                                } else {
+                                    "Failed: probe mismatch (${got.exceptionOrNull()?.message})"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    },
+                    onPush = {
+                        webdavBusy = true
+                        webdavStatus = "Uploading backup…"
+                        scope.launch {
+                            try {
+                                val config = webdavConfig()
+                                if (!config.isComplete()) {
+                                    webdavStatus = "Enter server URL and username first"
+                                    return@launch
+                                }
+                                val json = backupManager.exportToJson()
+                                val result = WebDavClient.pushBackup(
+                                    config, json, deviceId()
+                                )
+                                if (result.isSuccess) {
+                                    preferencesManager.setWebdavLastSyncAt(
+                                        result.getOrNull()?.updatedAt
+                                            ?: System.currentTimeMillis()
+                                    )
+                                    webdavRemote = null
+                                    webdavStatus = "Uploaded just now"
+                                    snackbarHostState.showSnackbar("Backup uploaded to WebDAV")
+                                } else {
+                                    webdavStatus =
+                                        "Upload failed: ${result.exceptionOrNull()?.message}"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    },
+                    onCheck = {
+                        webdavBusy = true
+                        webdavStatus = "Checking server…"
+                        scope.launch {
+                            try {
+                                val config = webdavConfig()
+                                if (!config.isComplete()) {
+                                    webdavStatus = "Enter server URL and username first"
+                                    return@launch
+                                }
+                                val result = WebDavClient.fetchMeta(config)
+                                if (result.isSuccess) {
+                                    val meta = result.getOrNull()!!
+                                    webdavRemote = meta
+                                    webdavStatus = null
+                                } else {
+                                    webdavRemote = null
+                                    webdavStatus =
+                                        "No backup on server (${result.exceptionOrNull()?.message})"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    },
+                    onDownload = {
+                        webdavBusy = true
+                        webdavStatus = "Downloading…"
+                        scope.launch {
+                            try {
+                                val pulled = WebDavClient.pullBackup(webdavConfig())
+                                if (pulled.isFailure) {
+                                    webdavStatus =
+                                        "Download failed: ${pulled.exceptionOrNull()?.message}"
+                                    return@launch
+                                }
+                                val restore = backupManager.restoreFromJson(
+                                    pulled.getOrNull() ?: "",
+                                    com.emptycastle.novery.data.backup.RestoreOptions()
+                                )
+                                if (restore.success) {
+                                    preferencesManager.setWebdavLastSyncAt(
+                                        System.currentTimeMillis()
+                                    )
+                                    webdavStatus = null
+                                    snackbarHostState.showSnackbar(
+                                        "Restored ${restore.totalItemsRestored} items from WebDAV"
+                                    )
+                                } else {
+                                    webdavStatus = "Restore failed: ${restore.error}"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    }
+                )
+            }
+
+            // Slice-06.4: Telegram bot backup (free off-site copy).
+            item(key = "telegram_card") {
+                TelegramCard(
+                    botToken = tgBotToken,
+                    chatId = tgChatId,
+                    lastSentAt = tgLastSentAt,
+                    status = tgStatus,
+                    busy = tgBusy,
+                    onTokenChange = { preferencesManager.setTgBotToken(it) },
+                    onChatIdChange = { preferencesManager.setTgChatId(it) },
+                    onTest = {
+                        tgBusy = true
+                        tgStatus = "Checking bot…"
+                        scope.launch {
+                            try {
+                                val result =
+                                    com.emptycastle.novery.data.sync.TelegramBackup.getMe(tgBotToken)
+                                tgStatus = if (result.isSuccess) {
+                                    "Connected as @${result.getOrNull()}"
+                                } else {
+                                    "Failed: ${result.exceptionOrNull()?.message}"
+                                }
+                            } finally {
+                                tgBusy = false
+                            }
+                        }
+                    },
+                    onSend = {
+                        tgBusy = true
+                        tgStatus = "Sending backup…"
+                        scope.launch {
+                            try {
+                                if (tgBotToken.isBlank() || tgChatId.isBlank()) {
+                                    tgStatus = "Enter bot token and chat ID first"
+                                    return@launch
+                                }
+                                val json = backupManager.exportToJson()
+                                val result = com.emptycastle.novery.data.sync.TelegramBackup.sendBackup(
+                                    token = tgBotToken,
+                                    chatId = tgChatId,
+                                    backupJson = json,
+                                    fileName = backupManager.generateBackupFileName(),
+                                    caption = "Novery backup ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+                                )
+                                if (result.isSuccess) {
+                                    preferencesManager.setTgLastSentAt(System.currentTimeMillis())
+                                    tgStatus = "Sent just now"
+                                    snackbarHostState.showSnackbar("Backup sent to Telegram")
+                                } else {
+                                    tgStatus = "Send failed: ${result.exceptionOrNull()?.message}"
+                                }
+                            } finally {
+                                tgBusy = false
+                            }
+                        }
                     }
                 )
             }
@@ -853,6 +1115,301 @@ private fun BackupRestoreCard(
     }
 }
 
+// ─── Telegram Backup Card (Slice-06.4) ────────────────────────────────────────────
+
+@Composable
+private fun TelegramCard(
+    botToken: String,
+    chatId: String,
+    lastSentAt: Long,
+    status: String?,
+    busy: Boolean,
+    onTokenChange: (String) -> Unit,
+    onChatIdChange: (String) -> Unit,
+    onTest: () -> Unit,
+    onSend: () -> Unit
+) {
+    val dateFormat = remember {
+        SimpleDateFormat("MMM dd, yyyy 'at' HH:mm", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Telegram Backup",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "Send backups to your own chat via a Telegram bot (free off-site copy). " +
+                    "Create a bot with @BotFather, then message it once so it can reply. " +
+                    (if (lastSentAt > 0) {
+                        "Last sent: ${dateFormat.format(Date(lastSentAt))}"
+                    } else {
+                        "Restore by downloading the file in Telegram and importing it above"
+                    }),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = botToken,
+                onValueChange = onTokenChange,
+                label = { Text("Bot token") },
+                placeholder = { Text("123456:ABC-DEF…") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = chatId,
+                onValueChange = onChatIdChange,
+                label = { Text("Chat ID") },
+                placeholder = { Text("Your numeric user ID") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            status?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    TextButton(onClick = onTest) { Text("Test") }
+                    TextButton(onClick = onSend) { Text("Send backup") }
+                }
+            }
+        }
+    }
+}
+
+// ─── WebDAV Sync Card (Slice-06.3) ───────────────────────────────────────────────
+
+@Composable
+private fun WebDavCard(
+    url: String,
+    username: String,
+    password: String,
+    lastSyncAt: Long,
+    remote: SyncMeta?,
+    status: String?,
+    busy: Boolean,
+    onUrlChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onTest: () -> Unit,
+    onPush: () -> Unit,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit
+) {
+    val dateFormat = remember {
+        SimpleDateFormat("MMM dd, yyyy 'at' HH:mm", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "WebDAV Sync",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "Sync backups with your own server or any free WebDAV provider. " +
+                    (if (lastSyncAt > 0) {
+                        "Last sync: ${dateFormat.format(Date(lastSyncAt))}"
+                    } else {
+                        "Never synced"
+                    }),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = url,
+                onValueChange = onUrlChange,
+                label = { Text("Server URL") },
+                placeholder = { Text("https://example.com/dav") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = onUsernameChange,
+                    label = { Text("Username") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("Password") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            remote?.let { meta ->
+                Text(
+                    text = "Server has backup from ${dateFormat.format(Date(meta.updatedAt))} " +
+                        "(${meta.deviceId.take(16)})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            status?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    TextButton(onClick = onTest) { Text("Test") }
+                    TextButton(onClick = onPush) { Text("Upload") }
+                    TextButton(onClick = onCheck) { Text("Check") }
+                    if (remote != null) {
+                        TextButton(onClick = onDownload) { Text("Download") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Auto-Backup Card (Slice-06.2) ─────────────────────────────────────────────
+
+@Composable
+private fun AutoBackupCard(
+    enabled: Boolean,
+    intervalHours: Long,
+    lastBackupAt: Long,
+    onEnabledChange: (Boolean) -> Unit,
+    onIntervalChange: (Long) -> Unit,
+    onBackupNow: () -> Unit
+) {
+    var intervalExpanded by remember { mutableStateOf(false) }
+    val intervals = BackupScheduler.SUPPORTED_INTERVALS_HOURS
+    val dateFormat = remember {
+        SimpleDateFormat("MMM dd, yyyy 'at' HH:mm", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Automatic Backups",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (lastBackupAt > 0) {
+                            "Last backup: ${dateFormat.format(Date(lastBackupAt))}"
+                        } else {
+                            "Keeps the last ${BackupScheduler.KEEP_AUTO_BACKUPS} backups on this device"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            }
+
+            AnimatedVisibility(visible = enabled) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Every",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Box {
+                            OutlinedButton(onClick = { intervalExpanded = true }) {
+                                Text(BackupScheduler.intervalLabel(intervalHours))
+                            }
+                            DropdownMenu(
+                                expanded = intervalExpanded,
+                                onDismissRequest = { intervalExpanded = false }
+                            ) {
+                                intervals.forEach { hours ->
+                                    DropdownMenuItem(
+                                        text = { Text(BackupScheduler.intervalLabel(hours)) },
+                                        onClick = {
+                                            intervalExpanded = false
+                                            onIntervalChange(hours)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        TextButton(onClick = onBackupNow) {
+                            Text("Back up now")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ─── Storage Overview Card ──────────────────────────────────────────────────────
 
 @Composable
@@ -1297,7 +1854,8 @@ private fun RestoreOptionsDialog(
     }
 
     val hasAnySelected = options.restoreLibrary || options.restoreBookmarks ||
-            options.restoreHistory || options.restoreStatistics || options.restoreSettings
+            options.restoreHistory || options.restoreStatistics || options.restoreSettings ||
+            options.restoreWorks || options.restoreTextFilters
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1350,6 +1908,42 @@ private fun RestoreOptionsDialog(
                             InfoRow("Version", metadata.appVersion)
                         }
                         InfoRow("Device", metadata.deviceInfo)
+                        // Slice-06.1: integrity badge.
+                        if (!metadata.isQuickNovelBackup) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Integrity ",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Surface(
+                                    color = if (metadata.checksumValid == true) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHigh
+                                    },
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = if (metadata.checksumValid == true) {
+                                            "Verified"
+                                        } else {
+                                            "Legacy (unverified)"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (metadata.checksumValid == true) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.padding(
+                                            horizontal = 6.dp,
+                                            vertical = 2.dp
+                                        )
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1402,7 +1996,9 @@ private fun RestoreOptionsDialog(
                                         restoreBookmarks = metadata.bookmarkCount > 0,
                                         restoreHistory = metadata.historyCount > 0,
                                         restoreStatistics = metadata.hasStatistics,
-                                        restoreSettings = metadata.hasSettings
+                                        restoreSettings = metadata.hasSettings,
+                                        restoreWorks = metadata.worksCount > 0,
+                                        restoreTextFilters = metadata.textFiltersCount > 0
                                     )
                                 )
                             },
@@ -1422,7 +2018,9 @@ private fun RestoreOptionsDialog(
                                         restoreBookmarks = false,
                                         restoreHistory = false,
                                         restoreStatistics = false,
-                                        restoreSettings = false
+                                        restoreSettings = false,
+                                        restoreWorks = false,
+                                        restoreTextFilters = false
                                     )
                                 )
                             },
@@ -1485,6 +2083,22 @@ private fun RestoreOptionsDialog(
                         enabled = metadata.hasSettings,
                         onCheckedChange = {
                             onOptionsChange(options.copy(restoreSettings = it))
+                        }
+                    )
+                    RestoreOptionRow(
+                        label = "Source links (${metadata.worksCount} works)",
+                        checked = options.restoreWorks && metadata.worksCount > 0,
+                        enabled = metadata.worksCount > 0,
+                        onCheckedChange = {
+                            onOptionsChange(options.copy(restoreWorks = it))
+                        }
+                    )
+                    RestoreOptionRow(
+                        label = "Text filters (${metadata.textFiltersCount})",
+                        checked = options.restoreTextFilters && metadata.textFiltersCount > 0,
+                        enabled = metadata.textFiltersCount > 0,
+                        onCheckedChange = {
+                            onOptionsChange(options.copy(restoreTextFilters = it))
                         }
                     )
                 }
