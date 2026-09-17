@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Contrast
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
@@ -114,6 +115,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,6 +123,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.update.LibraryUpdateScheduler
 import com.emptycastle.novery.domain.model.AppSettings
 import com.emptycastle.novery.domain.model.CustomThemeColors
 import com.emptycastle.novery.domain.model.DisplayMode
@@ -139,10 +142,14 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onNavigateToStorage: () -> Unit
+    onNavigateToStorage: () -> Unit,
+    onNavigateToFilters: () -> Unit = {}
 ) {
     val preferencesManager = remember { RepositoryProvider.getPreferencesManager() }
     val settings by preferencesManager.appSettings.collectAsStateWithLifecycle()
+    val libraryUpdateEnabled by preferencesManager.libraryUpdateEnabled.collectAsStateWithLifecycle()
+    val libraryUpdateIntervalHours by preferencesManager.libraryUpdateIntervalHours.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -432,6 +439,49 @@ fun SettingsScreen(
             }
 
             // ═══════════════════════════════════════════════════════════
+            // LIBRARY UPDATES (Scheduled Background Refresh — slice-01)
+            // ═══════════════════════════════════════════════════════════
+            item { SectionHeader("Library Updates", Icons.Outlined.RestartAlt) }
+            item {
+                SettingsCard {
+                    ToggleItem(
+                        icon = Icons.Outlined.DownloadForOffline,
+                        title = "Auto-Refresh Library",
+                        subtitle = "Check for new chapters on a schedule (WiFi, battery-friendly)",
+                        checked = libraryUpdateEnabled,
+                        highlight = true,
+                        onCheckedChange = {
+                            preferencesManager.setLibraryUpdateEnabled(it)
+                            LibraryUpdateScheduler.apply(context, it, libraryUpdateIntervalHours)
+                        }
+                    )
+
+                    AnimatedVisibility(
+                        visible = libraryUpdateEnabled,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column {
+                            SettingsDivider()
+                            val intervals = LibraryUpdateScheduler.SUPPORTED_INTERVALS_HOURS
+                            DropdownItem(
+                                icon = Icons.Outlined.Numbers,
+                                title = "Check Interval",
+                                selectedValue = LibraryUpdateScheduler.intervalLabel(libraryUpdateIntervalHours),
+                                options = intervals.map { LibraryUpdateScheduler.intervalLabel(it) },
+                                selectedIndex = intervals.indexOf(libraryUpdateIntervalHours).coerceAtLeast(0),
+                                onSelect = {
+                                    val hours = intervals[it]
+                                    preferencesManager.setLibraryUpdateIntervalHours(hours)
+                                    LibraryUpdateScheduler.apply(context, true, hours)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════
             // READER (Reading Experience)
             // ═══════════════════════════════════════════════════════════
             item { SectionHeader("Reader", Icons.Outlined.MenuBook) }
@@ -455,6 +505,21 @@ fun SettingsScreen(
                         onCheckedChange = {
                             preferencesManager.updateAppSettings(settings.copy(infiniteScroll = it))
                         }
+                    )
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════
+            // FILTERS (Ad & Text Cleanup)
+            // ═══════════════════════════════════════════════════════════
+            item { SectionHeader("Filters", Icons.Outlined.FilterAlt) }
+            item {
+                SettingsCard {
+                    NavigationItem(
+                        icon = Icons.Outlined.FilterAlt,
+                        title = "Text Filters",
+                        subtitle = "Remove ad text, Discord/Patreon links, and custom rules",
+                        onClick = onNavigateToFilters
                     )
                 }
             }

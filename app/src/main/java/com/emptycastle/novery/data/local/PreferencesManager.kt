@@ -29,6 +29,7 @@ import com.emptycastle.novery.provider.MainProvider
 import com.emptycastle.novery.ui.screens.details.ChapterDisplayMode
 import com.emptycastle.novery.ui.screens.details.ChaptersPerPage
 import com.emptycastle.novery.ui.screens.reader.logic.AuthorNoteDisplayMode
+import com.emptycastle.novery.util.TextFilterRule
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,6 +73,15 @@ class PreferencesManager(context: Context) {
 
     private val _favoriteProviders = MutableStateFlow<Set<String>>(loadFavoriteProviders())
     val favoriteProviders: StateFlow<Set<String>> = _favoriteProviders.asStateFlow()
+
+    // Slice-01: scheduled library updates (default OFF — zero production impact).
+    private val _libraryUpdateEnabled =
+        MutableStateFlow(prefs.getBoolean(KEY_LIBRARY_UPDATE_ENABLED, false))
+    val libraryUpdateEnabled: StateFlow<Boolean> = _libraryUpdateEnabled.asStateFlow()
+
+    private val _libraryUpdateIntervalHours =
+        MutableStateFlow(prefs.getLong(KEY_LIBRARY_UPDATE_INTERVAL_HOURS, 24L))
+    val libraryUpdateIntervalHours: StateFlow<Long> = _libraryUpdateIntervalHours.asStateFlow()
 
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
@@ -550,6 +560,31 @@ class PreferencesManager(context: Context) {
 
     fun updateAutoDownloadStatuses(statuses: Set<ReadingStatus>) {
         updateAppSettings(_appSettings.value.copy(autoDownloadForStatuses = statuses))
+    }
+
+    // =========================================================================
+    // SLICE-01: SCHEDULED LIBRARY UPDATES
+    // =========================================================================
+
+    fun setLibraryUpdateEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LIBRARY_UPDATE_ENABLED, enabled).apply()
+        _libraryUpdateEnabled.value = enabled
+    }
+
+    fun setLibraryUpdateIntervalHours(hours: Long) {
+        val clamped = hours.coerceIn(12L, 168L)
+        prefs.edit().putLong(KEY_LIBRARY_UPDATE_INTERVAL_HOURS, clamped).apply()
+        _libraryUpdateIntervalHours.value = clamped
+    }
+
+    private fun resetLibraryUpdateSettings() {
+        prefs.edit().apply {
+            putBoolean(KEY_LIBRARY_UPDATE_ENABLED, false)
+            putLong(KEY_LIBRARY_UPDATE_INTERVAL_HOURS, 24L)
+            apply()
+        }
+        _libraryUpdateEnabled.value = false
+        _libraryUpdateIntervalHours.value = 24L
     }
 
     fun setSpicyShelfRevealed(revealed: Boolean) {
@@ -1346,6 +1381,31 @@ class PreferencesManager(context: Context) {
     }
 
     // =========================================================================
+    // TEXT FILTER SETTINGS
+    // =========================================================================
+
+    fun getCustomTextFilterRules(): List<TextFilterRule> {
+        val jsonString = prefs.getString(KEY_TEXT_FILTER_RULES, null) ?: return emptyList()
+        return try {
+            json.decodeFromString(jsonString)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun getDisabledBuiltinRuleIds(): Set<String> {
+        return prefs.getStringSet(KEY_DISABLED_BUILTIN_RULES, emptySet()) ?: emptySet()
+    }
+
+    fun saveTextFilterRules(customRules: List<TextFilterRule>, disabledBuiltinIds: Set<String>) {
+        prefs.edit().apply {
+            putString(KEY_TEXT_FILTER_RULES, json.encodeToString(customRules))
+            putStringSet(KEY_DISABLED_BUILTIN_RULES, disabledBuiltinIds)
+            apply()
+        }
+    }
+
+    // =========================================================================
     // EXPORT ALL SETTINGS
     // =========================================================================
 
@@ -1496,6 +1556,9 @@ class PreferencesManager(context: Context) {
         // Reset search history and favorite providers
         clearSearchHistory()
         clearFavoriteProviders()
+
+        // Reset slice-01 scheduled library updates
+        resetLibraryUpdateSettings()
     }
 
     /**
@@ -1599,6 +1662,8 @@ class PreferencesManager(context: Context) {
 
         private const val KEY_SEARCH_HISTORY = "search_history"
         private const val KEY_FAVORITE_PROVIDERS = "favorite_providers"
+        private const val KEY_TEXT_FILTER_RULES = "text_filter_rules"
+        private const val KEY_DISABLED_BUILTIN_RULES = "disabled_builtin_rules"
 
         // =====================================================================
         // READER SETTINGS KEYS
@@ -1724,6 +1789,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_AUTO_DOWNLOAD_WIFI_ONLY = "auto_download_wifi_only"
         private const val KEY_AUTO_DOWNLOAD_LIMIT = "auto_download_limit"
         private const val KEY_AUTO_DOWNLOAD_STATUSES = "auto_download_statuses"
+        private const val KEY_LIBRARY_UPDATE_ENABLED = "library_update_enabled"
+        private const val KEY_LIBRARY_UPDATE_INTERVAL_HOURS = "library_update_interval_hours"
 
         // =====================================================================
         // APP SETTINGS KEYS
