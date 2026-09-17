@@ -200,7 +200,9 @@ fun NovelActionSheet(
     onFindDuplicates: (suspend (Novel) -> List<LibraryItem>)? = null,
     onOpenDuplicate: (LibraryItem) -> Unit = {},
     // Slice-04.1b: post-migration navigation (url + provider of the target).
-    onMigrated: ((String, String) -> Unit)? = null
+    onMigrated: ((String, String) -> Unit)? = null,
+    // Slice-04.3: open a novel found by alternative-source search.
+    onOpenNovel: (Novel) -> Unit = {}
 ) {
     var showCoverZoom by remember { mutableStateOf(false) }
     var showSynopsisOverlay by remember { mutableStateOf(false) }
@@ -214,6 +216,8 @@ fun NovelActionSheet(
     var migrateTarget by remember(data.novel.url) { mutableStateOf<LibraryItem?>(null) }
     // Slice-04.2: merge target.
     var mergeTarget by remember(data.novel.url) { mutableStateOf<LibraryItem?>(null) }
+    // Slice-04.3: alternative-source search sheet.
+    var showAlternatives by remember(data.novel.url) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Dialogs
@@ -349,7 +353,7 @@ fun NovelActionSheet(
 
             // Slice-03.3: suggest-only duplicate lookup for library entries.
             if (data.isInLibrary && onFindDuplicates != null) {
-                DuplicatesSection(
+                                DuplicatesSection(
                     duplicates = duplicates,
                     finding = findingDuplicates,
                     workId = workId,
@@ -374,7 +378,25 @@ fun NovelActionSheet(
                         }
                     },
                     onMoveHere = { item -> migrateTarget = item },
-                    onMergeHere = { item -> mergeTarget = item }
+                    onMergeHere = { item -> mergeTarget = item },
+                    onSearchAlternatives = { showAlternatives = true }
+                )
+            }
+
+            // Slice-04.3: alternative-source search.
+            if (showAlternatives) {
+                AlternativeSourcesSheet(
+                    query = data.novel.name,
+                    excludeProvider = data.novel.apiName,
+                    onDismiss = { showAlternatives = false },
+                    onOpen = { novel ->
+                        showAlternatives = false
+                        scope.launch {
+                            sheetState.hide()
+                            onDismiss()
+                            onOpenNovel(novel)
+                        }
+                    }
                 )
             }
 
@@ -388,9 +410,13 @@ fun NovelActionSheet(
                     onDismiss = { mergeTarget = null },
                     onMerged = {
                         mergeTarget = null
-                        // If this sheet's own row was the removed duplicate,
-                        // close the sheet — its entry no longer exists.
                         scope.launch {
+                            // Refresh candidates (the merged entry is gone)…
+                            try {
+                                onFindDuplicates?.let { duplicates = it(data.novel) }
+                            } catch (_: Exception) {
+                            }
+                            // …and close the sheet if our own row was removed.
                             val stillThere = try {
                                 RepositoryProvider.getLibraryRepository()
                                     .getLibraryItem(data.novel.url) != null
@@ -673,6 +699,119 @@ private fun CompactHeader(
                         overflow = TextOverflow.Ellipsis,
                         fontWeight = FontWeight.Medium
                     )
+                }
+            }
+        }
+    }
+}
+
+// Slice-04.3: alternative-source search — finds the same title on other
+// providers (e.g. when the current source is dead). Opening a hit goes to
+// its details, where duplicate attach/merge take over.
+@Composable
+private fun AlternativeSourcesSheet(
+    query: String,
+    excludeProvider: String,
+    onDismiss: () -> Unit,
+    onOpen: (Novel) -> Unit
+) {
+    var results by remember(query) { mutableStateOf<Map<String, List<Novel>>>(emptyMap()) }
+    var searching by remember(query) { mutableStateOf(true) }
+
+    LaunchedEffect(query) {
+        searching = true
+        try {
+            RepositoryProvider.getNovelRepository()
+                .searchAllStreaming(query)
+                .collect { (providerName, result) ->
+                    if (providerName == excludeProvider) return@collect
+                    result.getOrNull()?.takeIf { it.isNotEmpty() }?.let { hits ->
+                        results = results + (providerName to hits.take(5))
+                    }
+                }
+        } catch (_: Exception) {
+            // Partial results stand.
+        } finally {
+            searching = false
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = RoundedCornerShape(20.dp)) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Other sources",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "\"$query\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (searching && results.isEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "Searching sources…",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+                if (!searching && results.isEmpty()) {
+                    Text(
+                        text = "No matches on other sources",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                results.forEach { (providerName, hits) ->
+                    Text(
+                        text = providerName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    hits.forEach { novel ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onOpen(novel) }
+                                .padding(vertical = 6.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = novel.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "Open",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Close") }
                 }
             }
         }
@@ -1122,7 +1261,8 @@ private fun DuplicatesSection(
     onFind: () -> Unit,
     onOpen: (LibraryItem) -> Unit,
     onMoveHere: (LibraryItem) -> Unit,
-    onMergeHere: (LibraryItem) -> Unit
+    onMergeHere: (LibraryItem) -> Unit,
+    onSearchAlternatives: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1152,6 +1292,10 @@ private fun DuplicatesSection(
                 OutlinedButton(onClick = onFind) {
                     Text("Find duplicates on other sources")
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(onClick = onSearchAlternatives) {
+                    Text("Search all sources for this title")
+                }
             }
             duplicates.isEmpty() -> {
                 Text(
@@ -1159,6 +1303,10 @@ private fun DuplicatesSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(onClick = onSearchAlternatives) {
+                    Text("Search all sources for this title")
+                }
             }
             else -> {
                 Text(
