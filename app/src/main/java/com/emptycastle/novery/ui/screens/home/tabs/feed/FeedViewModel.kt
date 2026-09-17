@@ -3,9 +3,12 @@ package com.emptycastle.novery.ui.screens.home.tabs.feed
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.emptycastle.novery.data.feed.FeedEngine
+import com.emptycastle.novery.data.feed.SavedSearch
+import com.emptycastle.novery.data.feed.SavedSearches
 import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.provider.MainProvider
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,15 +29,25 @@ data class FeedSection(
 data class FeedUiState(
     val sections: List<FeedSection> = emptyList(),
     val isLoading: Boolean = true,
-    val lastUpdatedAt: Long? = null
+    val lastUpdatedAt: Long? = null,
+    // Slice-07.1b: cross-provider search + saved searches.
+    val searchQuery: String = "",
+    val isSearching: Boolean = false,
+    val hasSearched: Boolean = false,
+    val searchSections: List<FeedSection> = emptyList()
 )
 
 class FeedViewModel : ViewModel() {
 
     private val novelRepository = RepositoryProvider.getNovelRepository()
+    private val preferencesManager = RepositoryProvider.getPreferencesManager()
 
     private val _uiState = MutableStateFlow(FeedUiState())
     val uiState: StateFlow<FeedUiState> = _uiState.asStateFlow()
+
+    val savedSearches: StateFlow<List<SavedSearch>> = preferencesManager.savedSearches
+
+    private var searchJob: Job? = null
 
     init {
         refresh()
@@ -80,5 +93,75 @@ class FeedViewModel : ViewModel() {
                 error = e.message?.take(120) ?: "Failed to load"
             )
         }
+    }
+
+    // ================================================================
+    // SLICE-07.1b: SEARCH + SAVED SEARCHES
+    // ================================================================
+
+    fun updateQuery(query: String) {
+        _uiState.update { it.copy(searchQuery = query) }
+    }
+
+    fun runSearch(query: String = _uiState.value.searchQuery) {
+        val normalized = SavedSearches.normalize(query) ?: return
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    searchQuery = normalized,
+                    isSearching = true,
+                    hasSearched = true,
+                    searchSections = emptyList()
+                )
+            }
+            try {
+                val accumulator = mutableMapOf<String, FeedSection>()
+                novelRepository.searchAllStreaming(normalized).collect { (providerName, result) ->
+                    val section = result.fold(
+                        onSuccess = { novels ->
+                            FeedSection(
+                                providerName = providerName,
+                                novels = novels.take(FeedEngine.SECTION_LIMIT),
+                                error = null
+                            )
+                        },
+                        onFailure = { e ->
+                            FeedSection(
+                                providerName = providerName,
+                                novels = emptyList(),
+                                error = e.message?.take(120) ?: "Search failed"
+                            )
+                        }
+                    )
+                    accumulator[providerName] = section
+                    _uiState.update {
+                        it.copy(searchSections = accumulator.values.toList())
+                    }
+                }
+            } finally {
+                _uiState.update { it.copy(isSearching = false) }
+            }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        _uiState.update {
+            it.copy(
+                searchQuery = "",
+                isSearching = false,
+                hasSearched = false,
+                searchSections = emptyList()
+            )
+        }
+    }
+
+    fun saveSearch(query: String = _uiState.value.searchQuery) {
+        preferencesManager.addSavedSearch(query)
+    }
+
+    fun deleteSavedSearch(id: String) {
+        preferencesManager.removeSavedSearch(id)
     }
 }

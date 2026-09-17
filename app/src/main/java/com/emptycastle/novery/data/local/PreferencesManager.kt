@@ -141,6 +141,12 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getLong(KEY_TG_LAST_SENT_AT, 0L))
     val tgLastSentAt: StateFlow<Long> = _tgLastSentAt.asStateFlow()
 
+    // Slice-07.1b: saved feed searches.
+    private val _savedSearches =
+        MutableStateFlow(loadSavedSearches())
+    val savedSearches: StateFlow<List<com.emptycastle.novery.data.feed.SavedSearch>> =
+        _savedSearches.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -736,6 +742,43 @@ class PreferencesManager(context: Context) {
         _tgBotToken.value = ""
         _tgChatId.value = ""
         _tgLastSentAt.value = 0L
+    }
+
+    // =========================================================================
+    // SLICE-07.1b: SAVED FEED SEARCHES
+    // =========================================================================
+
+    private fun loadSavedSearches(): List<com.emptycastle.novery.data.feed.SavedSearch> {
+        val jsonString = prefs.getString(KEY_SAVED_SEARCHES, null) ?: return emptyList()
+        return try {
+            json.decodeFromString<List<com.emptycastle.novery.data.feed.SavedSearch>>(jsonString)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun persistSavedSearches(value: List<com.emptycastle.novery.data.feed.SavedSearch>) {
+        prefs.edit()
+            .putString(KEY_SAVED_SEARCHES, json.encodeToString(value))
+            .apply()
+        _savedSearches.value = value
+    }
+
+    fun addSavedSearch(query: String) {
+        persistSavedSearches(
+            com.emptycastle.novery.data.feed.SavedSearches.add(_savedSearches.value, query)
+        )
+    }
+
+    fun removeSavedSearch(id: String) {
+        persistSavedSearches(
+            com.emptycastle.novery.data.feed.SavedSearches.remove(_savedSearches.value, id)
+        )
+    }
+
+    fun clearSavedSearches() {
+        prefs.edit().remove(KEY_SAVED_SEARCHES).apply()
+        _savedSearches.value = emptyList()
     }
 
     private fun resetWebdavSettings() {
@@ -1747,6 +1790,7 @@ class PreferencesManager(context: Context) {
         // Reset search history and favorite providers
         clearSearchHistory()
         clearFavoriteProviders()
+        clearSavedSearches()
 
         // Reset slice-01 scheduled library updates
         resetLibraryUpdateSettings()
@@ -2007,6 +2051,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_TG_BOT_TOKEN = "tg_bot_token"
         private const val KEY_TG_CHAT_ID = "tg_chat_id"
         private const val KEY_TG_LAST_SENT_AT = "tg_last_sent_at"
+        private const val KEY_SAVED_SEARCHES = "saved_feed_searches"
 
         // =====================================================================
         // APP SETTINGS KEYS
