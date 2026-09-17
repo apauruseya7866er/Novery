@@ -23,6 +23,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,6 +62,10 @@ fun ReaderTopBar(
     largerTouchTargets: Boolean = false,
     onBack: () -> Unit,
     onBookmarkClick: () -> Unit,
+    // Slice-07.2c: chapter translation toggle.
+    translationOn: Boolean = false,
+    translationWorking: Boolean = false,
+    onTranslateClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
@@ -119,6 +125,31 @@ fun ReaderTopBar(
                             estimatedTimeLeft = displayTimeLeft,
                             style = progressStyle,
                             colors = colors
+                        )
+                    }
+                }
+
+                // Slice-07.2c: translate toggle (spinner while working).
+                if (translationWorking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = colors.accent,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                } else {
+                    IconButton(
+                        onClick = onTranslateClick,
+                        modifier = Modifier.size(buttonSize)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Translate,
+                            contentDescription = if (translationOn) {
+                                "Show original text"
+                            } else {
+                                "Translate chapter"
+                            },
+                            tint = if (translationOn) colors.accent else colors.icon
                         )
                     }
                 }

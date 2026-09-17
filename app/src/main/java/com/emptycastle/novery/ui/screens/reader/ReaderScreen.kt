@@ -26,6 +26,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -55,6 +59,7 @@ import com.emptycastle.novery.data.repository.RepositoryProvider
 import com.emptycastle.novery.domain.model.ProgressStyle
 import com.emptycastle.novery.domain.model.ReaderSettings
 import com.emptycastle.novery.domain.model.TapAction
+import com.emptycastle.novery.service.TTSServiceManager
 import com.emptycastle.novery.service.TTSStatus
 import com.emptycastle.novery.tts.VoiceInfo
 import com.emptycastle.novery.ui.components.ChapterListSheet
@@ -78,6 +83,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 // =============================================================================
 // MAIN SCREEN
@@ -103,6 +109,7 @@ fun ReaderScreen(
 
     val chapterListSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Auto-hide controls timer
     var autoHideJob by remember { mutableStateOf<Job?>(null) }
@@ -142,6 +149,23 @@ fun ReaderScreen(
         viewModel.onReaderEnter()
         onDispose {
             viewModel.onReaderExit()
+        }
+    }
+
+    // Slice-07.2c: translation feedback (working toast + failure snackbar).
+    LaunchedEffect(uiState.translationStatus) {
+        when (uiState.translationStatus) {
+            com.emptycastle.novery.ui.screens.reader.model.TranslationStatus.WORKING -> {
+                Toast.makeText(context, "Translating chapter…", Toast.LENGTH_SHORT).show()
+            }
+            com.emptycastle.novery.ui.screens.reader.model.TranslationStatus.FAILED -> {
+                snackbarHostState.showSnackbar(
+                    message = uiState.translationError ?: "Translation failed",
+                    duration = SnackbarDuration.Long
+                )
+                viewModel.clearTranslationError()
+            }
+            else -> Unit
         }
     }
 
@@ -539,7 +563,23 @@ fun ReaderScreen(
         },
         onPrevious = viewModel::navigateToPrevious,
         onNext = viewModel::navigateToNext,
-        onConfirmScrollReset = viewModel::confirmScrollReset
+        onConfirmScrollReset = viewModel::confirmScrollReset,
+        onToggleTranslation = viewModel::toggleTranslation,
+        onHideSentence = { sentenceText ->
+            val filterManager = RepositoryProvider.getTextFilterManager()
+            val rule = filterManager.addHiddenSentence(sentenceText)
+            scope.launch {
+                val result = snackbarHostState.showSnackbar(
+                    message = "Sentence hidden. Manage in Settings → Filters",
+                    actionLabel = "UNDO",
+                    duration = SnackbarDuration.Short
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    filterManager.removeRule(rule.id)
+                }
+            }
+        },
+        snackbarHostState = snackbarHostState
     )
 }
 
@@ -715,7 +755,11 @@ private fun ReaderScreenContent(
     onTTSAutoAdvanceChapterChange: (Boolean) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onConfirmScrollReset: () -> Unit
+    onConfirmScrollReset: () -> Unit,
+    onHideSentence: (String) -> Unit = {},
+    // Slice-07.2c: chapter translation toggle.
+    onToggleTranslation: () -> Unit = {},
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
 ) {
     val tapZones = uiState.settings.tapZones
 
@@ -829,6 +873,7 @@ private fun ReaderScreenContent(
                                 onSentenceBoundsUpdated(displayIndex, top, bottom)
                             },
                             currentSentenceBounds = currentSentenceBounds,
+                            onHideSentence = onHideSentence,
                             onPrevious = onPrevious,
                             onNext = onNext,
                             onBack = onBack,
@@ -855,7 +900,8 @@ private fun ReaderScreenContent(
                         onStopTTS = onStopTTS,
                         onTTSNext = onTTSNext,
                         onTTSPrevious = onTTSPrevious,
-                        onToggleTTSSettings = onToggleTTSSettings
+                        onToggleTTSSettings = onToggleTTSSettings,
+                        onToggleTranslation = onToggleTranslation
                     )
 
                     // TTS Settings Panel
@@ -930,6 +976,14 @@ private fun ReaderScreenContent(
                 modifier = Modifier.fillMaxSize()
             )
         }
+
+        // Snackbar Host for sentence hide / undo feedback
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 100.dp)
+        )
     }
 }
 
@@ -954,8 +1008,11 @@ private fun ControlsOverlay(
     onStopTTS: () -> Unit,
     onTTSNext: () -> Unit,
     onTTSPrevious: () -> Unit,
-    onToggleTTSSettings: () -> Unit
+    onToggleTTSSettings: () -> Unit,
+    // Slice-07.2c: chapter translation toggle.
+    onToggleTranslation: () -> Unit = {}
 ) {
+    val ttsPlaybackState by TTSServiceManager.playbackState.collectAsStateWithLifecycle()
     val animationDuration = if (uiState.settings.reduceMotion) 0 else ReaderDefaults.ControlsAnimationDuration
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -982,7 +1039,11 @@ private fun ControlsOverlay(
                 progressStyle = if (uiState.settings.showProgress) uiState.settings.progressStyle else ProgressStyle.NONE,
                 largerTouchTargets = uiState.settings.largerTouchTargets,
                 onBack = onBack,
-                onBookmarkClick = onToggleBookmark
+                onBookmarkClick = onToggleBookmark,
+                translationOn = uiState.translationEnabled,
+                translationWorking = uiState.translationStatus ==
+                    com.emptycastle.novery.ui.screens.reader.model.TranslationStatus.WORKING,
+                onTranslateClick = onToggleTranslation
             )
         }
 
@@ -1019,10 +1080,10 @@ private fun ControlsOverlay(
                     // TTS Player
                     TTSPlayer(
                         isPlaying = uiState.ttsStatus == TTSStatus.PLAYING,
-                        canGoPrevious = uiState.currentGlobalSentenceIndex > 0,
-                        canGoNext = uiState.currentGlobalSentenceIndex < uiState.totalTTSSentences - 1,
-                        currentSentenceInChapter = uiState.currentSentenceInChapter,
-                        totalSentencesInChapter = uiState.totalSentencesInChapter,
+                        canGoPrevious = ttsPlaybackState.currentSegmentIndex > 0 || ttsPlaybackState.hasPreviousChapter,
+                        canGoNext = ttsPlaybackState.currentSegmentIndex < ttsPlaybackState.totalSegments - 1 || ttsPlaybackState.hasNextChapter,
+                        currentSentenceInChapter = ttsPlaybackState.currentSegmentIndex,
+                        totalSentencesInChapter = ttsPlaybackState.totalSegments,
                         chapterNumber = uiState.currentChapterIndex + 1,
                         totalChapters = uiState.allChapters.size,
                         speechRate = uiState.ttsSettings.speed,
@@ -1032,7 +1093,14 @@ private fun ControlsOverlay(
                         onNext = onTTSNext,
                         onPrevious = onTTSPrevious,
                         onStop = onStopTTS,
-                        onOpenSettings = onToggleTTSSettings
+                        onOpenSettings = onToggleTTSSettings,
+                        onSeek = { fraction ->
+                            val totalSegments = ttsPlaybackState.totalSegments
+                            if (totalSegments > 0) {
+                                val targetIndex = (fraction * (totalSegments - 1)).roundToInt().coerceIn(0, totalSegments - 1)
+                                TTSServiceManager.seekToSegment(targetIndex)
+                            }
+                        }
                     )
                 } else {
                     // Reader bottom bar with inline settings
