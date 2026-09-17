@@ -1,5 +1,11 @@
 package com.emptycastle.novery.data.remote
 
+import android.content.Context
+import com.emptycastle.novery.data.remote.cloudflare.AppForegroundTracker
+import com.emptycastle.novery.data.remote.cloudflare.ChallengeKind
+import com.emptycastle.novery.data.remote.cloudflare.CloudflareChallengeDetector
+import com.emptycastle.novery.data.remote.cloudflare.CloudflareSolver
+import com.emptycastle.novery.data.repository.RepositoryProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
@@ -27,6 +33,109 @@ import java.util.concurrent.TimeUnit
 object NetworkClient {
 
     private val cookieJar = MemoryCookieJar()
+
+    @Volatile
+    private var appContext: Context? = null
+
+    /**
+     * Slice-02.3: provides the application context for the headless
+     * solver. Called once from NoveryApp.onCreate.
+     */
+    fun init(context: Context) {
+        if (appContext == null) {
+            appContext = context.applicationContext
+        }
+    }
+
+    private fun autoSolveFlag(): Boolean {
+        return runCatching {
+            RepositoryProvider.getPreferencesManager().cfAutoSolve.value
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Slice-02.3 retry gate — pure decision, unit-tested.
+     * Only managed challenges are auto-solved (single attempt);
+     * turnstile/hard blocks go to the manual path (2.4), rate limits are
+     * never solved.
+     */
+    fun shouldAttemptSolve(
+        kind: ChallengeKind,
+        depth: Int,
+        flagEnabled: Boolean,
+        foreground: Boolean
+    ): Boolean {
+        return flagEnabled && foreground && depth == 0 &&
+            kind == ChallengeKind.MANAGED_CHALLENGE
+    }
+
+    /**
+     * Executes a request, and — when Slice-02.3 conditions hold — runs the
+     * headless clearance session once and retries with fresh cookies.
+     * [requestFactory] rebuilds the request so retries send a fresh body.
+     */
+    private suspend fun execute(
+        requestFactory: () -> Request,
+        url: String,
+        depth: Int = 0
+    ): okhttp3.Response {
+        val request = requestFactory()
+        val response = httpClient.newCall(request).execute()
+        val code = response.code
+        if (depth == 0 && (code == 403 || code == 503 || code == 429)) {
+            val ctx = appContext
+            val flag = ctx != null &&
+                AppForegroundTracker.isForeground &&
+                autoSolveFlag()
+            if (flag) {
+                val peek = try {
+                    response.peekBody(512_000L).string()
+                } catch (_: Exception) {
+                    ""
+                }
+                val kind = CloudflareChallengeDetector.detect(
+                    code, peek, response.headers.toMap()
+                )
+                if (shouldAttemptSolve(
+                        kind, depth, true, AppForegroundTracker.isForeground
+                    ) && ctx != null
+                ) {
+                    // Mirror the interceptor UA priority so the clearance
+                    // matches the requesting stack.
+                    val domain = CloudflareManager.getDomain(url)
+                    val ua = request.header("User-Agent")
+                        ?: runCatching { CloudflareManager.getUserAgent(domain) }.getOrNull()
+                        ?: CloudflareManager.WEBVIEW_USER_AGENT
+                    android.util.Log.i(
+                        "NetworkClient",
+                        "CF managed challenge at $url — auto-solving"
+                    )
+                    when (CloudflareSolver.solve(ctx, url, ua)) {
+                        CloudflareSolver.SolveResult.Cleared -> {
+                            android.util.Log.i(
+                                "NetworkClient",
+                                "CF cleared — retrying $url"
+                            )
+                            response.close()
+                            return execute(requestFactory, url, 1)
+                        }
+                        else -> {
+                            android.util.Log.i(
+                                "NetworkClient",
+                                "CF auto-solve did not clear $url — returning blocked response"
+                            )
+                        }
+                    }
+                } else if (kind != ChallengeKind.NONE) {
+                    android.util.Log.i(
+                        "NetworkClient",
+                        "CF $kind at $url — auto-solve skipped (manual path)"
+                    )
+                }
+            }
+        }
+        return response
+    }
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -168,10 +277,14 @@ object NetworkClient {
     suspend fun get(url: String, headers: Map<String, String> = emptyMap()): NetworkResponse =
         withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder().url(url).get()
-                    .also { b -> headers.forEach { (k, v) -> b.header(k, v) } }
-                    .build()
-                val response = httpClient.newCall(request).execute()
+                val response = execute(
+                    {
+                        Request.Builder().url(url).get()
+                            .also { b -> headers.forEach { (k, v) -> b.header(k, v) } }
+                            .build()
+                    },
+                    url
+                )
                 val body = response.body?.string() ?: ""
                 buildResponse(response.code, body, url, response.headers)
             } catch (e: Exception) {
@@ -187,11 +300,15 @@ object NetworkClient {
     ): NetworkResponse = withContext(Dispatchers.IO) {
         try {
             val formBody = FormBody.Builder().also { b -> data.forEach { (k, v) -> b.add(k, v) } }.build()
-            val request = Request.Builder().url(url).post(formBody)
-                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                .also { b -> headers.forEach { (k, v) -> b.header(k, v) } }
-                .build()
-            val response = httpClient.newCall(request).execute()
+            val response = execute(
+                {
+                    Request.Builder().url(url).post(formBody)
+                        .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+                        .also { b -> headers.forEach { (k, v) -> b.header(k, v) } }
+                        .build()
+                },
+                url
+            )
             val body = response.body?.string() ?: ""
             buildResponse(response.code, body, url, response.headers)
         } catch (e: Exception) {
@@ -248,13 +365,17 @@ object NetworkClient {
             }
         }
 
-    suspend fun getText(url: String, headers: Map<String, String> = emptyMap()): String =
+    suspend     fun getText(url: String, headers: Map<String, String> = emptyMap()): String =
         withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder().url(url).get()
-                    .also { b -> headers.forEach { (k, v) -> b.header(k, v) } }
-                    .build()
-                val response = httpClient.newCall(request).execute()
+                val response = execute(
+                    {
+                        Request.Builder().url(url).get()
+                            .also { b -> headers.forEach { (k, v) -> b.header(k, v) } }
+                            .build()
+                    },
+                    url
+                )
                 if (!response.isSuccessful) throw NetworkException("HTTP ${response.code}")
                 response.body?.string() ?: ""
             } catch (e: NetworkException) {

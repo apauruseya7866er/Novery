@@ -152,6 +152,8 @@ fun SettingsScreen(
     val libraryUpdateIntervalHours by preferencesManager.libraryUpdateIntervalHours.collectAsStateWithLifecycle()
     val libraryUpdateWifiOnly by preferencesManager.libraryUpdateWifiOnly.collectAsStateWithLifecycle()
     val libraryUpdateRequireCharging by preferencesManager.libraryUpdateRequireCharging.collectAsStateWithLifecycle()
+    // Slice-02.3: Cloudflare auto-solve opt-in (default OFF).
+    val cfAutoSolve by preferencesManager.cfAutoSolve.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     var showResetDialog by remember { mutableStateOf(false) }
@@ -575,6 +577,23 @@ fun SettingsScreen(
                         title = "Text Filters",
                         subtitle = "Remove ad text, Discord/Patreon links, and custom rules",
                         onClick = onNavigateToFilters
+                    )
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════
+            // CLOUDFLARE (Slice-02: automatic challenge solving, opt-in)
+            // ═══════════════════════════════════════════════════════════
+            item { SectionHeader("Cloudflare", Icons.Outlined.Warning) }
+            item {
+                SettingsCard {
+                    ToggleItem(
+                        icon = Icons.Outlined.Info,
+                        title = "Auto-Solve Challenges",
+                        subtitle = "Automatically clear Cloudflare checks and retry (experimental)",
+                        checked = cfAutoSolve,
+                        highlight = true,
+                        onCheckedChange = { preferencesManager.setCfAutoSolve(it) }
                     )
                 }
             }
