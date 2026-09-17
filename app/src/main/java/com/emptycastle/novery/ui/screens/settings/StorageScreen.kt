@@ -180,6 +180,12 @@ fun StorageScreen(
     var webdavStatus by remember { mutableStateOf<String?>(null) }
     var webdavBusy by remember { mutableStateOf(false) }
     var webdavRemote by remember { mutableStateOf<SyncMeta?>(null) }
+    // Slice-06.4: Telegram state.
+    val tgBotToken by preferencesManager.tgBotToken.collectAsStateWithLifecycle()
+    val tgChatId by preferencesManager.tgChatId.collectAsStateWithLifecycle()
+    val tgLastSentAt by preferencesManager.tgLastSentAt.collectAsStateWithLifecycle()
+    var tgStatus by remember { mutableStateOf<String?>(null) }
+    var tgBusy by remember { mutableStateOf(false) }
 
     fun webdavConfig() = WebDavClient.Config(
         baseUrl = webdavUrl,
@@ -484,6 +490,65 @@ fun StorageScreen(
                                 }
                             } finally {
                                 webdavBusy = false
+                            }
+                        }
+                    }
+                )
+            }
+
+            // Slice-06.4: Telegram bot backup (free off-site copy).
+            item(key = "telegram_card") {
+                TelegramCard(
+                    botToken = tgBotToken,
+                    chatId = tgChatId,
+                    lastSentAt = tgLastSentAt,
+                    status = tgStatus,
+                    busy = tgBusy,
+                    onTokenChange = { preferencesManager.setTgBotToken(it) },
+                    onChatIdChange = { preferencesManager.setTgChatId(it) },
+                    onTest = {
+                        tgBusy = true
+                        tgStatus = "Checking bot…"
+                        scope.launch {
+                            try {
+                                val result =
+                                    com.emptycastle.novery.data.sync.TelegramBackup.getMe(tgBotToken)
+                                tgStatus = if (result.isSuccess) {
+                                    "Connected as @${result.getOrNull()}"
+                                } else {
+                                    "Failed: ${result.exceptionOrNull()?.message}"
+                                }
+                            } finally {
+                                tgBusy = false
+                            }
+                        }
+                    },
+                    onSend = {
+                        tgBusy = true
+                        tgStatus = "Sending backup…"
+                        scope.launch {
+                            try {
+                                if (tgBotToken.isBlank() || tgChatId.isBlank()) {
+                                    tgStatus = "Enter bot token and chat ID first"
+                                    return@launch
+                                }
+                                val json = backupManager.exportToJson()
+                                val result = com.emptycastle.novery.data.sync.TelegramBackup.sendBackup(
+                                    token = tgBotToken,
+                                    chatId = tgChatId,
+                                    backupJson = json,
+                                    fileName = backupManager.generateBackupFileName(),
+                                    caption = "Novery backup ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+                                )
+                                if (result.isSuccess) {
+                                    preferencesManager.setTgLastSentAt(System.currentTimeMillis())
+                                    tgStatus = "Sent just now"
+                                    snackbarHostState.showSnackbar("Backup sent to Telegram")
+                                } else {
+                                    tgStatus = "Send failed: ${result.exceptionOrNull()?.message}"
+                                }
+                            } finally {
+                                tgBusy = false
                             }
                         }
                     }
@@ -1044,6 +1109,93 @@ private fun BackupRestoreCard(
                             Text(if (restoring) "Restoring…" else "Restore")
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ─── Telegram Backup Card (Slice-06.4) ────────────────────────────────────────────
+
+@Composable
+private fun TelegramCard(
+    botToken: String,
+    chatId: String,
+    lastSentAt: Long,
+    status: String?,
+    busy: Boolean,
+    onTokenChange: (String) -> Unit,
+    onChatIdChange: (String) -> Unit,
+    onTest: () -> Unit,
+    onSend: () -> Unit
+) {
+    val dateFormat = remember {
+        SimpleDateFormat("MMM dd, yyyy 'at' HH:mm", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Telegram Backup",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "Send backups to your own chat via a Telegram bot (free off-site copy). " +
+                    "Create a bot with @BotFather, then message it once so it can reply. " +
+                    (if (lastSentAt > 0) {
+                        "Last sent: ${dateFormat.format(Date(lastSentAt))}"
+                    } else {
+                        "Restore by downloading the file in Telegram and importing it above"
+                    }),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = botToken,
+                onValueChange = onTokenChange,
+                label = { Text("Bot token") },
+                placeholder = { Text("123456:ABC-DEF…") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = chatId,
+                onValueChange = onChatIdChange,
+                label = { Text("Chat ID") },
+                placeholder = { Text("Your numeric user ID") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            status?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    TextButton(onClick = onTest) { Text("Test") }
+                    TextButton(onClick = onSend) { Text("Send backup") }
                 }
             }
         }

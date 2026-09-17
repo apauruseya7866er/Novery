@@ -128,6 +128,19 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getLong(KEY_WEBDAV_LAST_SYNC_AT, 0L))
     val webdavLastSyncAt: StateFlow<Long> = _webdavLastSyncAt.asStateFlow()
 
+    // Slice-06.4: Telegram bot backup (token + chat, plain settings).
+    private val _tgBotToken =
+        MutableStateFlow(prefs.getString(KEY_TG_BOT_TOKEN, "") ?: "")
+    val tgBotToken: StateFlow<String> = _tgBotToken.asStateFlow()
+
+    private val _tgChatId =
+        MutableStateFlow(prefs.getString(KEY_TG_CHAT_ID, "") ?: "")
+    val tgChatId: StateFlow<String> = _tgChatId.asStateFlow()
+
+    private val _tgLastSentAt =
+        MutableStateFlow(prefs.getLong(KEY_TG_LAST_SENT_AT, 0L))
+    val tgLastSentAt: StateFlow<Long> = _tgLastSentAt.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -690,6 +703,39 @@ class PreferencesManager(context: Context) {
     fun setWebdavLastSyncAt(timestamp: Long) {
         prefs.edit().putLong(KEY_WEBDAV_LAST_SYNC_AT, timestamp).apply()
         _webdavLastSyncAt.value = timestamp
+    }
+
+    // =========================================================================
+    // SLICE-06.4: TELEGRAM BOT BACKUP
+    // =========================================================================
+
+    fun setTgBotToken(token: String) {
+        val trimmed = token.trim()
+        prefs.edit().putString(KEY_TG_BOT_TOKEN, trimmed).apply()
+        _tgBotToken.value = trimmed
+    }
+
+    fun setTgChatId(chatId: String) {
+        val trimmed = chatId.trim()
+        prefs.edit().putString(KEY_TG_CHAT_ID, trimmed).apply()
+        _tgChatId.value = trimmed
+    }
+
+    fun setTgLastSentAt(timestamp: Long) {
+        prefs.edit().putLong(KEY_TG_LAST_SENT_AT, timestamp).apply()
+        _tgLastSentAt.value = timestamp
+    }
+
+    private fun resetTgSettings() {
+        prefs.edit().apply {
+            remove(KEY_TG_BOT_TOKEN)
+            remove(KEY_TG_CHAT_ID)
+            remove(KEY_TG_LAST_SENT_AT)
+            apply()
+        }
+        _tgBotToken.value = ""
+        _tgChatId.value = ""
+        _tgLastSentAt.value = 0L
     }
 
     private fun resetWebdavSettings() {
@@ -1713,6 +1759,9 @@ class PreferencesManager(context: Context) {
 
         // Reset slice-06.3 WebDAV settings
         resetWebdavSettings()
+
+        // Reset slice-06.4 Telegram settings
+        resetTgSettings()
     }
 
     /**
@@ -1955,6 +2004,9 @@ class PreferencesManager(context: Context) {
         private const val KEY_WEBDAV_USER = "webdav_user"
         private const val KEY_WEBDAV_PASS = "webdav_pass"
         private const val KEY_WEBDAV_LAST_SYNC_AT = "webdav_last_sync_at"
+        private const val KEY_TG_BOT_TOKEN = "tg_bot_token"
+        private const val KEY_TG_CHAT_ID = "tg_chat_id"
+        private const val KEY_TG_LAST_SENT_AT = "tg_last_sent_at"
 
         // =====================================================================
         // APP SETTINGS KEYS
