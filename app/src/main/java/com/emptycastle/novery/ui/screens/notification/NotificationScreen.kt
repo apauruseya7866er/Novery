@@ -360,37 +360,83 @@ private fun NotificationContent(
             }
         }
 
-        // Notification Items with swipe to delete
-        itemsIndexed(
-            items = uiState.displayItems,
-            key = { _, item -> item.libraryItem.novel.url }
-        ) { index, displayItem ->
-            TwoStageSwipeToDelete(
-                onDelete = { onRemoveFromNotifications(displayItem.libraryItem) },
-                deleteButtonWidth = 80.dp,
-                shape = RoundedCornerShape(20.dp)
-            ) { swipeState, onResetSwipe ->
-                NotificationItemCard(
-                    displayItem = displayItem,
-                    isDownloading = uiState.downloadingNovelUrls.contains(displayItem.libraryItem.novel.url),
-                    swipeState = swipeState,
-                    onDownload = { onDownload(displayItem.libraryItem) },
-                    onContinue = { onContinue(displayItem.libraryItem) },
-                    onMarkAsSeen = { onMarkAsSeen(displayItem.libraryItem) },
-                    onClick = {
-                        if (swipeState == SwipeDeleteState.Primed) {
-                            onResetSwipe()
-                        } else {
-                            onNovelClick(displayItem.libraryItem)
-                        }
-                    }
+        // Notification Items grouped by date, with swipe to delete
+        // Slice-05.1: sticky date headers (Today / Yesterday / Earlier).
+        uiState.groupedItems.forEach { section ->
+            stickyHeader(key = "group_${section.group.name}") {
+                UpdateGroupHeader(
+                    title = section.group.title,
+                    count = section.items.size
                 )
+            }
+            itemsIndexed(
+                items = section.items,
+                key = { _, item -> "${section.group.name}_${item.libraryItem.novel.url}" }
+            ) { _, displayItem ->
+                TwoStageSwipeToDelete(
+                    onDelete = { onRemoveFromNotifications(displayItem.libraryItem) },
+                    deleteButtonWidth = 80.dp,
+                    shape = RoundedCornerShape(20.dp)
+                ) { swipeState, onResetSwipe ->
+                    NotificationItemCard(
+                        displayItem = displayItem,
+                        isDownloading = uiState.downloadingNovelUrls.contains(displayItem.libraryItem.novel.url),
+                        swipeState = swipeState,
+                        onDownload = { onDownload(displayItem.libraryItem) },
+                        onContinue = { onContinue(displayItem.libraryItem) },
+                        onMarkAsSeen = { onMarkAsSeen(displayItem.libraryItem) },
+                        onClick = {
+                            if (swipeState == SwipeDeleteState.Primed) {
+                                onResetSwipe()
+                            } else {
+                                onNovelClick(displayItem.libraryItem)
+                            }
+                        }
+                    )
+                }
             }
         }
 
         // Bottom spacer
         item(key = "bottom_spacer") {
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+// ============================================================================
+// Slice-05.1: sticky date-group header
+// ============================================================================
+
+@Composable
+private fun UpdateGroupHeader(
+    title: String,
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "$count",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

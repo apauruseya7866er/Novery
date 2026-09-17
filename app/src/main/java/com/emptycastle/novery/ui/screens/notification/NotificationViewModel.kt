@@ -81,9 +81,15 @@ class NotificationViewModel : ViewModel() {
                     displayItems to Triple(totalNewChapters, displayItems.size, unacknowledgedCount)
                 }.collect { (displayItems, stats) ->
                     val (totalNew, totalCount, unackCount) = stats
+                    // Slice-05.1: bucket by notification recency.
+                    val grouped = UpdateGrouper.group(
+                        displayItems,
+                        { it.notificationEntry.lastUpdatedAt }
+                    ).map { (group, items) -> UpdateGroupSection(group, items) }
                     _uiState.update {
                         it.copy(
                             displayItems = displayItems,
+                            groupedItems = grouped,
                             totalNewChapters = totalNew,
                             totalNovelsCount = totalCount,
                             unacknowledgedCount = unackCount,

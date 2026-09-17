@@ -12,8 +12,18 @@ data class NotificationDisplayItem(
     val isNew: Boolean
 )
 
+/**
+ * Slice-05.1: one date bucket of the Updates list.
+ */
+data class UpdateGroupSection(
+    val group: UpdateGroup,
+    val items: List<NotificationDisplayItem>
+)
+
 data class NotificationUiState(
     val displayItems: List<NotificationDisplayItem> = emptyList(),
+    // Slice-05.1: date-grouped view of displayItems (Today/Yesterday/Earlier).
+    val groupedItems: List<UpdateGroupSection> = emptyList(),
     val isLoading: Boolean = true,
 
     val totalNewChapters: Int = 0,
