@@ -21,11 +21,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LibraryBooks
@@ -71,6 +73,12 @@ val bottomNavItems = listOf(
         label = "Browse",
         selectedIcon = Icons.Filled.Explore,
         unselectedIcon = Icons.Outlined.Explore
+    ),
+    BottomNavItem(
+        route = "feed",
+        label = "Feed",
+        selectedIcon = Icons.Filled.DynamicFeed,
+        unselectedIcon = Icons.Outlined.DynamicFeed
     ),
     BottomNavItem(
         route = "foryou",

@@ -21,6 +21,8 @@ sealed class NavRoutes(val route: String) {
 
     object Storage : NavRoutes("settings/storage")
 
+    object Filters : NavRoutes("settings/filters")
+
     object Notifications : NavRoutes("notifications")
 
     // ================================================================
@@ -105,6 +107,8 @@ sealed class NavRoutes(val route: String) {
     sealed class Tab(route: String) : NavRoutes(route) {
         object Library : Tab("tab_library")
         object Browse : Tab("tab_browse")
+        // Slice-07.1a: latest-updates feed.
+        object Feed : Tab("tab_feed")
         object ForYou : Tab("tab_foryou")
         object History : Tab("tab_history")
         object More : Tab("tab_more")
@@ -125,6 +129,8 @@ enum class HomeTabs(
 ) {
     LIBRARY("tab_library", "Library"),
     BROWSE("tab_browse", "Browse"),
+    // Slice-07.1a: latest-updates feed.
+    FEED("tab_feed", "Feed"),
     FOR_YOU("tab_foryou", "For You"),
     HISTORY("tab_history", "History"),
     MORE("tab_more", "More");
