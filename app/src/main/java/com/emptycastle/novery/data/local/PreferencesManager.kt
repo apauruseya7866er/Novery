@@ -110,6 +110,24 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getLong(KEY_BACKUP_LAST_AUTO_AT, 0L))
     val backupLastAutoAt: StateFlow<Long> = _backupLastAutoAt.asStateFlow()
 
+    // Slice-06.3: WebDAV sync endpoint (stored as plain settings, same as
+    // all other app preferences).
+    private val _webdavUrl =
+        MutableStateFlow(prefs.getString(KEY_WEBDAV_URL, "") ?: "")
+    val webdavUrl: StateFlow<String> = _webdavUrl.asStateFlow()
+
+    private val _webdavUser =
+        MutableStateFlow(prefs.getString(KEY_WEBDAV_USER, "") ?: "")
+    val webdavUser: StateFlow<String> = _webdavUser.asStateFlow()
+
+    private val _webdavPass =
+        MutableStateFlow(prefs.getString(KEY_WEBDAV_PASS, "") ?: "")
+    val webdavPass: StateFlow<String> = _webdavPass.asStateFlow()
+
+    private val _webdavLastSyncAt =
+        MutableStateFlow(prefs.getLong(KEY_WEBDAV_LAST_SYNC_AT, 0L))
+    val webdavLastSyncAt: StateFlow<Long> = _webdavLastSyncAt.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -646,6 +664,46 @@ class PreferencesManager(context: Context) {
     fun setBackupLastAutoAt(timestamp: Long) {
         prefs.edit().putLong(KEY_BACKUP_LAST_AUTO_AT, timestamp).apply()
         _backupLastAutoAt.value = timestamp
+    }
+
+    // =========================================================================
+    // SLICE-06.3: WEBDAV SYNC
+    // =========================================================================
+
+    fun setWebdavUrl(url: String) {
+        val trimmed = url.trim()
+        prefs.edit().putString(KEY_WEBDAV_URL, trimmed).apply()
+        _webdavUrl.value = trimmed
+    }
+
+    fun setWebdavUser(user: String) {
+        val trimmed = user.trim()
+        prefs.edit().putString(KEY_WEBDAV_USER, trimmed).apply()
+        _webdavUser.value = trimmed
+    }
+
+    fun setWebdavPass(password: String) {
+        prefs.edit().putString(KEY_WEBDAV_PASS, password).apply()
+        _webdavPass.value = password
+    }
+
+    fun setWebdavLastSyncAt(timestamp: Long) {
+        prefs.edit().putLong(KEY_WEBDAV_LAST_SYNC_AT, timestamp).apply()
+        _webdavLastSyncAt.value = timestamp
+    }
+
+    private fun resetWebdavSettings() {
+        prefs.edit().apply {
+            remove(KEY_WEBDAV_URL)
+            remove(KEY_WEBDAV_USER)
+            remove(KEY_WEBDAV_PASS)
+            remove(KEY_WEBDAV_LAST_SYNC_AT)
+            apply()
+        }
+        _webdavUrl.value = ""
+        _webdavUser.value = ""
+        _webdavPass.value = ""
+        _webdavLastSyncAt.value = 0L
     }
 
     private fun resetBackupAutoSettings() {
@@ -1652,6 +1710,9 @@ class PreferencesManager(context: Context) {
 
         // Reset slice-06 auto-backup settings
         resetBackupAutoSettings()
+
+        // Reset slice-06.3 WebDAV settings
+        resetWebdavSettings()
     }
 
     /**
@@ -1890,6 +1951,10 @@ class PreferencesManager(context: Context) {
         private const val KEY_BACKUP_AUTO_ENABLED = "backup_auto_enabled"
         private const val KEY_BACKUP_AUTO_INTERVAL_HOURS = "backup_auto_interval_hours"
         private const val KEY_BACKUP_LAST_AUTO_AT = "backup_last_auto_at"
+        private const val KEY_WEBDAV_URL = "webdav_url"
+        private const val KEY_WEBDAV_USER = "webdav_user"
+        private const val KEY_WEBDAV_PASS = "webdav_pass"
+        private const val KEY_WEBDAV_LAST_SYNC_AT = "webdav_last_sync_at"
 
         // =====================================================================
         // APP SETTINGS KEYS

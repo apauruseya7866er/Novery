@@ -74,6 +74,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -85,6 +86,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.emptycastle.novery.data.backup.BackupScheduler
 import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.sync.SyncMeta
+import com.emptycastle.novery.data.sync.WebDavClient
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -169,6 +172,31 @@ fun StorageScreen(
     val backupAutoEnabled by preferencesManager.backupAutoEnabled.collectAsStateWithLifecycle()
     val backupAutoIntervalHours by preferencesManager.backupAutoIntervalHours.collectAsStateWithLifecycle()
     val backupLastAutoAt by preferencesManager.backupLastAutoAt.collectAsStateWithLifecycle()
+    // Slice-06.3: WebDAV state.
+    val webdavUrl by preferencesManager.webdavUrl.collectAsStateWithLifecycle()
+    val webdavUser by preferencesManager.webdavUser.collectAsStateWithLifecycle()
+    val webdavPass by preferencesManager.webdavPass.collectAsStateWithLifecycle()
+    val webdavLastSyncAt by preferencesManager.webdavLastSyncAt.collectAsStateWithLifecycle()
+    var webdavStatus by remember { mutableStateOf<String?>(null) }
+    var webdavBusy by remember { mutableStateOf(false) }
+    var webdavRemote by remember { mutableStateOf<SyncMeta?>(null) }
+
+    fun webdavConfig() = WebDavClient.Config(
+        baseUrl = webdavUrl,
+        username = webdavUser,
+        password = webdavPass
+    )
+
+    fun deviceId(): String {
+        return try {
+            android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID
+            ) ?: "unknown-device"
+        } catch (_: Exception) {
+            "unknown-device"
+        }
+    }
 
     // Sorted downloads
     val sortedDownloads = remember(novelDownloads, downloadSortOrder) {
@@ -327,6 +355,136 @@ fun StorageScreen(
                         BackupScheduler.runNow(context)
                         scope.launch {
                             snackbarHostState.showSnackbar("Backup started in background")
+                        }
+                    }
+                )
+            }
+
+            // Slice-06.3: WebDAV cloud sync (self-hosted or free providers).
+            item(key = "webdav_card") {
+                WebDavCard(
+                    url = webdavUrl,
+                    username = webdavUser,
+                    password = webdavPass,
+                    lastSyncAt = webdavLastSyncAt,
+                    remote = webdavRemote,
+                    status = webdavStatus,
+                    busy = webdavBusy,
+                    onUrlChange = { preferencesManager.setWebdavUrl(it) },
+                    onUsernameChange = { preferencesManager.setWebdavUser(it) },
+                    onPasswordChange = { preferencesManager.setWebdavPass(it) },
+                    onTest = {
+                        webdavBusy = true
+                        webdavStatus = "Testing connection…"
+                        scope.launch {
+                            try {
+                                val config = webdavConfig()
+                                if (!config.isComplete()) {
+                                    webdavStatus = "Enter server URL and username first"
+                                    return@launch
+                                }
+                                val probe = "novery-probe-${System.currentTimeMillis()}".toByteArray()
+                                val put = WebDavClient.putBytes(config, "novery-probe.txt", probe)
+                                if (put.isFailure) {
+                                    webdavStatus = "Failed: ${put.exceptionOrNull()?.message}"
+                                    return@launch
+                                }
+                                val got = WebDavClient.getBytes(config, "novery-probe.txt")
+                                webdavStatus = if (got.isSuccess && got.getOrNull()?.contentEquals(probe) == true) {
+                                    "Connection OK — server is writable"
+                                } else {
+                                    "Failed: probe mismatch (${got.exceptionOrNull()?.message})"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    },
+                    onPush = {
+                        webdavBusy = true
+                        webdavStatus = "Uploading backup…"
+                        scope.launch {
+                            try {
+                                val config = webdavConfig()
+                                if (!config.isComplete()) {
+                                    webdavStatus = "Enter server URL and username first"
+                                    return@launch
+                                }
+                                val json = backupManager.exportToJson()
+                                val result = WebDavClient.pushBackup(
+                                    config, json, deviceId()
+                                )
+                                if (result.isSuccess) {
+                                    preferencesManager.setWebdavLastSyncAt(
+                                        result.getOrNull()?.updatedAt
+                                            ?: System.currentTimeMillis()
+                                    )
+                                    webdavRemote = null
+                                    webdavStatus = "Uploaded just now"
+                                    snackbarHostState.showSnackbar("Backup uploaded to WebDAV")
+                                } else {
+                                    webdavStatus =
+                                        "Upload failed: ${result.exceptionOrNull()?.message}"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    },
+                    onCheck = {
+                        webdavBusy = true
+                        webdavStatus = "Checking server…"
+                        scope.launch {
+                            try {
+                                val config = webdavConfig()
+                                if (!config.isComplete()) {
+                                    webdavStatus = "Enter server URL and username first"
+                                    return@launch
+                                }
+                                val result = WebDavClient.fetchMeta(config)
+                                if (result.isSuccess) {
+                                    val meta = result.getOrNull()!!
+                                    webdavRemote = meta
+                                    webdavStatus = null
+                                } else {
+                                    webdavRemote = null
+                                    webdavStatus =
+                                        "No backup on server (${result.exceptionOrNull()?.message})"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
+                        }
+                    },
+                    onDownload = {
+                        webdavBusy = true
+                        webdavStatus = "Downloading…"
+                        scope.launch {
+                            try {
+                                val pulled = WebDavClient.pullBackup(webdavConfig())
+                                if (pulled.isFailure) {
+                                    webdavStatus =
+                                        "Download failed: ${pulled.exceptionOrNull()?.message}"
+                                    return@launch
+                                }
+                                val restore = backupManager.restoreFromJson(
+                                    pulled.getOrNull() ?: "",
+                                    com.emptycastle.novery.data.backup.RestoreOptions()
+                                )
+                                if (restore.success) {
+                                    preferencesManager.setWebdavLastSyncAt(
+                                        System.currentTimeMillis()
+                                    )
+                                    webdavStatus = null
+                                    snackbarHostState.showSnackbar(
+                                        "Restored ${restore.totalItemsRestored} items from WebDAV"
+                                    )
+                                } else {
+                                    webdavStatus = "Restore failed: ${restore.error}"
+                                }
+                            } finally {
+                                webdavBusy = false
+                            }
                         }
                     }
                 )
@@ -885,6 +1043,121 @@ private fun BackupRestoreCard(
                             Spacer(Modifier.width(8.dp))
                             Text(if (restoring) "Restoring…" else "Restore")
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── WebDAV Sync Card (Slice-06.3) ───────────────────────────────────────────────
+
+@Composable
+private fun WebDavCard(
+    url: String,
+    username: String,
+    password: String,
+    lastSyncAt: Long,
+    remote: SyncMeta?,
+    status: String?,
+    busy: Boolean,
+    onUrlChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onTest: () -> Unit,
+    onPush: () -> Unit,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit
+) {
+    val dateFormat = remember {
+        SimpleDateFormat("MMM dd, yyyy 'at' HH:mm", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "WebDAV Sync",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "Sync backups with your own server or any free WebDAV provider. " +
+                    (if (lastSyncAt > 0) {
+                        "Last sync: ${dateFormat.format(Date(lastSyncAt))}"
+                    } else {
+                        "Never synced"
+                    }),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = url,
+                onValueChange = onUrlChange,
+                label = { Text("Server URL") },
+                placeholder = { Text("https://example.com/dav") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = onUsernameChange,
+                    label = { Text("Username") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("Password") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            remote?.let { meta ->
+                Text(
+                    text = "Server has backup from ${dateFormat.format(Date(meta.updatedAt))} " +
+                        "(${meta.deviceId.take(16)})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            status?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    TextButton(onClick = onTest) { Text("Test") }
+                    TextButton(onClick = onPush) { Text("Upload") }
+                    TextButton(onClick = onCheck) { Text("Check") }
+                    if (remote != null) {
+                        TextButton(onClick = onDownload) { Text("Download") }
                     }
                 }
             }
