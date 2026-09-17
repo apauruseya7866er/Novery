@@ -82,7 +82,10 @@ object RepositoryProvider {
     fun getWorkRepository(): WorkRepository {
         return workRepository ?: WorkRepository(
             workDao = getDatabase().workDao(),
-            libraryDao = getDatabase().libraryDao()
+            libraryDao = getDatabase().libraryDao(),
+            historyDao = getDatabase().historyDao(),
+            offlineDao = getDatabase().offlineDao(),
+            db = getDatabase()
         ).also { workRepository = it }
     }
 
