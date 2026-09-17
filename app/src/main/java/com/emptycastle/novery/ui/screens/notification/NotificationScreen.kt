@@ -204,6 +204,12 @@ fun NotificationScreen(
                         // Don't auto-mark as seen on click - let user decide
                         onNavigateToDetails(item.novel.url, item.novel.apiName)
                     },
+                    // Slice-05.3: failed refresh entries (retry / open / dismiss).
+                    onRetryError = { url -> viewModel.retryUpdateError(url) },
+                    onDismissError = { url -> viewModel.dismissUpdateError(url) },
+                    onOpenErrorDetails = { url, provider ->
+                        onNavigateToDetails(url, provider)
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -270,6 +276,10 @@ private fun NotificationContent(
     onMarkAllSeen: () -> Unit,
     onRemoveFromNotifications: (LibraryItem) -> Unit,
     onNovelClick: (LibraryItem) -> Unit,
+    // Slice-05.3: failed refresh entries.
+    onRetryError: (String) -> Unit,
+    onDismissError: (String) -> Unit,
+    onOpenErrorDetails: (novelUrl: String, providerName: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -277,6 +287,11 @@ private fun NotificationContent(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Slice-05.4: visible background work (self-hides when idle).
+        item(key = "background_work") {
+            com.emptycastle.novery.ui.components.BackgroundWorkBanner()
+        }
+
         // Summary Header Card (only show if there are unacknowledged items)
         if (uiState.unacknowledgedCount > 0) {
             item(key = "summary_header") {
@@ -287,6 +302,21 @@ private fun NotificationContent(
                     isMarkingAllSeen = uiState.isMarkingAllSeen,
                     onDownloadAll = onDownloadAll,
                     onMarkAllSeen = onMarkAllSeen,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
+        }
+
+        // Slice-05.3: failed refresh entries (retry from here, open
+        // details to find an alternative source via slice-04 flows).
+        if (uiState.updateErrors.isNotEmpty()) {
+            item(key = "update_errors") {
+                UpdateErrorsCard(
+                    errors = uiState.updateErrors,
+                    retryingUrls = uiState.retryingUrls,
+                    onRetry = onRetryError,
+                    onDismiss = onDismissError,
+                    onOpenDetails = onOpenErrorDetails,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             }
@@ -360,37 +390,83 @@ private fun NotificationContent(
             }
         }
 
-        // Notification Items with swipe to delete
-        itemsIndexed(
-            items = uiState.displayItems,
-            key = { _, item -> item.libraryItem.novel.url }
-        ) { index, displayItem ->
-            TwoStageSwipeToDelete(
-                onDelete = { onRemoveFromNotifications(displayItem.libraryItem) },
-                deleteButtonWidth = 80.dp,
-                shape = RoundedCornerShape(20.dp)
-            ) { swipeState, onResetSwipe ->
-                NotificationItemCard(
-                    displayItem = displayItem,
-                    isDownloading = uiState.downloadingNovelUrls.contains(displayItem.libraryItem.novel.url),
-                    swipeState = swipeState,
-                    onDownload = { onDownload(displayItem.libraryItem) },
-                    onContinue = { onContinue(displayItem.libraryItem) },
-                    onMarkAsSeen = { onMarkAsSeen(displayItem.libraryItem) },
-                    onClick = {
-                        if (swipeState == SwipeDeleteState.Primed) {
-                            onResetSwipe()
-                        } else {
-                            onNovelClick(displayItem.libraryItem)
-                        }
-                    }
+        // Notification Items grouped by date, with swipe to delete
+        // Slice-05.1: sticky date headers (Today / Yesterday / Earlier).
+        uiState.groupedItems.forEach { section ->
+            stickyHeader(key = "group_${section.group.name}") {
+                UpdateGroupHeader(
+                    title = section.group.title,
+                    count = section.items.size
                 )
+            }
+            itemsIndexed(
+                items = section.items,
+                key = { _, item -> "${section.group.name}_${item.libraryItem.novel.url}" }
+            ) { _, displayItem ->
+                TwoStageSwipeToDelete(
+                    onDelete = { onRemoveFromNotifications(displayItem.libraryItem) },
+                    deleteButtonWidth = 80.dp,
+                    shape = RoundedCornerShape(20.dp)
+                ) { swipeState, onResetSwipe ->
+                    NotificationItemCard(
+                        displayItem = displayItem,
+                        isDownloading = uiState.downloadingNovelUrls.contains(displayItem.libraryItem.novel.url),
+                        swipeState = swipeState,
+                        onDownload = { onDownload(displayItem.libraryItem) },
+                        onContinue = { onContinue(displayItem.libraryItem) },
+                        onMarkAsSeen = { onMarkAsSeen(displayItem.libraryItem) },
+                        onClick = {
+                            if (swipeState == SwipeDeleteState.Primed) {
+                                onResetSwipe()
+                            } else {
+                                onNovelClick(displayItem.libraryItem)
+                            }
+                        }
+                    )
+                }
             }
         }
 
         // Bottom spacer
         item(key = "bottom_spacer") {
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+// ============================================================================
+// Slice-05.1: sticky date-group header
+// ============================================================================
+
+@Composable
+private fun UpdateGroupHeader(
+    title: String,
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "$count",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -661,6 +737,97 @@ private fun NotificationItemCard(
 // ... (keep all the existing helper composables: UpdatesSummaryCard, StatBadge,
 // SummaryActionButton, NotificationPrimaryButton, NotificationSecondaryButton,
 // NotificationEmptyState, NotificationLoadingState, skeleton composables)
+
+// ============================================================================
+// Slice-05.3: failed refresh entries
+// ============================================================================
+
+@Composable
+private fun UpdateErrorsCard(
+    errors: List<com.emptycastle.novery.data.update.UpdateError>,
+    retryingUrls: Set<String>,
+    onRetry: (String) -> Unit,
+    onDismiss: (String) -> Unit,
+    onOpenDetails: (novelUrl: String, providerName: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = if (errors.size == 1) "1 source failed to update"
+                else "${errors.size} sources failed to update",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            errors.forEach { error ->
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = error.novelName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = com.emptycastle.novery.data.update.UpdateErrorStore
+                                .timeAgo(error.timestamp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "${error.providerName} • ${error.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (retryingUrls.contains(error.novelUrl)) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                        } else {
+                            TextButton(onClick = { onRetry(error.novelUrl) }) {
+                                Text("Retry")
+                            }
+                        }
+                        TextButton(onClick = {
+                            onOpenDetails(error.novelUrl, error.providerName)
+                        }) {
+                            Text("Details")
+                        }
+                        TextButton(onClick = { onDismiss(error.novelUrl) }) {
+                            Text("Dismiss")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 // ============================================================================
 // Clear Confirmation Dialog

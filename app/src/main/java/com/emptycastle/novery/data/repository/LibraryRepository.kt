@@ -67,7 +67,19 @@ data class LibraryRefreshResult(
     val totalNewChapters: Int,
     val totalChecked: Int = 0,
     val skippedCount: Int = 0,
-    val errors: List<String> = emptyList()
+    val errors: List<String> = emptyList(),
+    // Slice-05.3: structured per-novel failures for the error screen.
+    val errorDetails: List<RefreshError> = emptyList()
+)
+
+/**
+ * Slice-05.3: one novel that failed to refresh.
+ */
+data class RefreshError(
+    val novelUrl: String,
+    val novelName: String,
+    val providerName: String,
+    val message: String
 )
 
 /**
@@ -527,6 +539,7 @@ class LibraryRepository(
         var updatedCount = 0
         var totalNewChapters = 0
         val errors = mutableListOf<String>()
+        val errorDetails = mutableListOf<RefreshError>()
 
         novelsToRefresh.forEachIndexed { index, entity ->
             onProgress(index + 1, novelsToRefresh.size, entity.name)
@@ -555,6 +568,15 @@ class LibraryRepository(
                     }
                 } catch (e: Exception) {
                     errors.add("${entity.name}: ${e.message}")
+                    // Slice-05.3: structured record for the error screen.
+                    errorDetails.add(
+                        RefreshError(
+                            novelUrl = entity.url,
+                            novelName = entity.name,
+                            providerName = entity.apiName,
+                            message = e.message?.take(140) ?: "Refresh failed"
+                        )
+                    )
                 }
             }
 
@@ -567,7 +589,8 @@ class LibraryRepository(
             totalNewChapters = totalNewChapters,
             totalChecked = novelsToRefresh.size,
             skippedCount = skippedCount,
-            errors = errors
+            errors = errors,
+            errorDetails = errorDetails
         )
     }
 

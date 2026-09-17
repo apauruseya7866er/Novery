@@ -118,6 +118,7 @@ import com.emptycastle.novery.domain.model.LibraryFilter
 import com.emptycastle.novery.domain.model.ReadingStatus
 import com.emptycastle.novery.domain.model.UiDensity
 import com.emptycastle.novery.ui.components.NovelActionSheet
+import com.emptycastle.novery.ui.components.BackgroundWorkBanner
 import com.emptycastle.novery.ui.components.NovelCard
 import com.emptycastle.novery.ui.components.NovelCardSkeleton
 import com.emptycastle.novery.ui.components.NovelListItem
@@ -715,6 +716,8 @@ private fun LibraryContent(
                         totalCount = uiState.items.size,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
+                    // Slice-05.4: visible background work (self-hides when idle).
+                    BackgroundWorkBanner(modifier = Modifier.padding(top = 8.dp))
                 }
 
                 if (showRefreshProgress) {
@@ -774,6 +777,8 @@ private fun LibraryContent(
                         totalCount = uiState.items.size,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
+                    // Slice-05.4: visible background work (self-hides when idle).
+                    BackgroundWorkBanner(modifier = Modifier.padding(top = 8.dp))
                 }
 
                 if (showRefreshProgress) {

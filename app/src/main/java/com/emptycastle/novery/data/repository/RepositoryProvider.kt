@@ -28,6 +28,7 @@ object RepositoryProvider {
     private var statsRepository: StatsRepository? = null
     private var bookmarkRepository: BookmarkRepository? = null
     private var notificationRepository: NotificationRepository? = null
+    private var appContext: Context? = null
 
     private var userPreferenceManager: UserPreferenceManager? = null
     private var recommendationEngine: RecommendationEngine? = null
@@ -41,6 +42,9 @@ object RepositoryProvider {
      * Initialize the repository provider with application context
      */
     fun initialize(context: Context) {
+        if (appContext == null) {
+            appContext = context.applicationContext
+        }
         if (database == null) {
             database = NovelDatabase.getInstance(context)
         }
@@ -177,6 +181,19 @@ object RepositoryProvider {
 
     fun getNotificationRepository(): NotificationRepository {
         return notificationRepository ?: throw IllegalStateException("NotificationRepository not initialized")
+    }
+
+    private var updateErrorStore: com.emptycastle.novery.data.update.UpdateErrorStore? = null
+
+    /**
+     * Slice-05.3: file-backed store of the last refresh failures.
+     */
+    fun getUpdateErrorStore(): com.emptycastle.novery.data.update.UpdateErrorStore {
+        return updateErrorStore ?: com.emptycastle.novery.data.update.UpdateErrorStore(
+            appContext ?: throw IllegalStateException(
+                "RepositoryProvider not initialized. Call initialize() first."
+            )
+        ).also { updateErrorStore = it }
     }
 
     /**
