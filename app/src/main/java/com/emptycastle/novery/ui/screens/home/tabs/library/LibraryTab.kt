@@ -194,6 +194,14 @@ fun LibraryTab(
             onFindDuplicates = { novel -> viewModel.findDuplicateEntries(novel) },
             onOpenDuplicate = { item ->
                 onNavigateToDetails(item.novel.url, item.novel.apiName)
+            },
+            // Slice-04.1b: after migration, open the new entry.
+            onMigrated = { url, provider ->
+                onNavigateToDetails(url, provider)
+            },
+            // Slice-04.3: open alternative-source hits in details.
+            onOpenNovel = { novel ->
+                onNavigateToDetails(novel.url, novel.apiName)
             }
         )
     }

@@ -259,7 +259,9 @@ fun BrowseTab(
                 onNavigateToDetails(duplicate.novel.url, duplicate.novel.apiName)
             },
             onAddAnyway = { viewModel.addDuplicateAnyway() },
-            onDismiss = { viewModel.dismissDuplicateWarning() }
+            onDismiss = { viewModel.dismissDuplicateWarning() },
+            // Slice-04.2: attach as an alternate source instead of a new row.
+            onAttachAlternate = true
         )
     }
 

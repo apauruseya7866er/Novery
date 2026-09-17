@@ -167,6 +167,7 @@ class DetailsViewModel : ViewModel() {
                     }
                     recomputeFilteredChapters()
                     loadLibraryStatus(novelUrl)
+                    loadWorkProjections(novelUrl)
                     observeChapterStatus(novelUrl)
 
                     // After successfully loading novel details, cache them:
@@ -202,8 +203,7 @@ class DetailsViewModel : ViewModel() {
         loadNovel(novelUrl, providerName, forceRefresh = true)
     }
 
-    private fun loadLibraryStatus(novelUrl: String) {
-        viewModelScope.launch {
+    private fun loadLibraryStatus(novelUrl: String) {        viewModelScope.launch {
             val isFavorite = libraryRepository.isFavorite(novelUrl)
             val entry = libraryRepository.getEntry(novelUrl)
             val readingPosition = libraryRepository.getReadingPosition(novelUrl)
@@ -227,6 +227,66 @@ class DetailsViewModel : ViewModel() {
                     lastReadChapterName = lastChapterName,
                     lastReadChapterIndex = lastReadIndex
                 )
+            }
+        }
+    }
+
+    // ================================================================
+    // SLICE-04.2: WORK PROJECTIONS (alternate sources)
+    // ================================================================
+
+    private fun loadWorkProjections(novelUrl: String) {
+        viewModelScope.launch {
+            try {
+                val repo = RepositoryProvider.getWorkRepository()
+                val work = repo.getWorkForNovel(novelUrl)
+                if (work == null) {
+                    _uiState.update {
+                        it.copy(workProjections = emptyList(), workDefaultUrl = null)
+                    }
+                    return@launch
+                }
+                _uiState.update {
+                    it.copy(
+                        workProjections = repo.getProjections(work.id),
+                        workDefaultUrl = work.defaultNovelUrl
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("DetailsViewModel", "loadWorkProjections failed", e)
+            }
+        }
+    }
+
+    fun switchProjectionSource(novelUrl: String) {
+        viewModelScope.launch {
+            try {
+                val current = currentNovelUrl ?: return@launch
+                val repo = RepositoryProvider.getWorkRepository()
+                val work = repo.getWorkForNovel(current) ?: return@launch
+                repo.setDefaultProjection(work.id, novelUrl)
+                loadWorkProjections(current)
+            } catch (e: Exception) {
+                android.util.Log.w("DetailsViewModel", "switchProjectionSource failed", e)
+            }
+        }
+    }
+
+    fun detachProjectionSource(novelUrl: String) {
+        viewModelScope.launch {
+            try {
+                val current = currentNovelUrl ?: return@launch
+                val repo = RepositoryProvider.getWorkRepository()
+                val work = repo.getWorkForNovel(current) ?: return@launch
+                when (repo.detachProjection(work.id, novelUrl)) {
+                    com.emptycastle.novery.data.repository.WorkRepository.DetachOutcome.Detached ->
+                        loadWorkProjections(current)
+                    com.emptycastle.novery.data.repository.WorkRepository.DetachOutcome.LastProjection -> {
+                        android.util.Log.i("DetailsViewModel", "detach refused: last projection")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("DetailsViewModel", "detachProjectionSource failed", e)
             }
         }
     }

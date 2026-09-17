@@ -22,6 +22,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -30,7 +35,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.emptycastle.novery.data.repository.LibraryItem
+import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.repository.WorkRepository
 import com.emptycastle.novery.domain.model.Novel
+import kotlinx.coroutines.launch
 
 @Composable
 fun DuplicateLibraryDialog(
@@ -38,9 +46,15 @@ fun DuplicateLibraryDialog(
     duplicates: List<LibraryItem>,
     onViewExisting: (LibraryItem) -> Unit,
     onAddAnyway: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // Slice-04.2: when true, offers "Add as alternate source" which attaches
+    // the target to the existing entry's work WITHOUT creating a new row.
+    onAttachAlternate: Boolean = false
 ) {
     val primaryDuplicate = duplicates.firstOrNull()
+    val scope = rememberCoroutineScope()
+    var attachError by remember { mutableStateOf<String?>(null) }
+    var attaching by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -104,6 +118,48 @@ fun DuplicateLibraryDialog(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Add anyway")
+            }
+
+            // Slice-04.2: attach as an alternate source of the saved entry
+            // instead of creating a duplicate shelf row.
+            if (onAttachAlternate && primaryDuplicate?.workId != null) {
+                OutlinedButton(
+                    onClick = {
+                        if (attaching) return@OutlinedButton
+                        attaching = true
+                        attachError = null
+                        scope.launch {
+                            try {
+                                val workId = primaryDuplicate.workId!!
+                                when (
+                                    RepositoryProvider.getWorkRepository()
+                                        .attachProjection(workId, target)
+                                ) {
+                                    WorkRepository.AttachOutcome.Attached -> onDismiss()
+                                    WorkRepository.AttachOutcome.AlreadyAttached ->
+                                        attachError = "Already an alternate source of this entry"
+                                    WorkRepository.AttachOutcome.InOtherWork ->
+                                        attachError = "Already part of another entry"
+                                }
+                            } catch (e: Exception) {
+                                attachError = e.message ?: "Could not attach source"
+                            } finally {
+                                attaching = false
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (attaching) "Attaching…" else "Add as alternate source")
+                }
+            }
+
+            attachError?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
 
             OutlinedButton(

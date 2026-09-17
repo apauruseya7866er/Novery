@@ -82,6 +82,7 @@ import com.emptycastle.novery.ui.screens.details.components.ReviewCard
 import com.emptycastle.novery.ui.screens.details.components.ReviewsHeader
 import com.emptycastle.novery.ui.screens.details.components.ReviewsLoadingIndicator
 import com.emptycastle.novery.ui.screens.details.components.SelectionModeOverlay
+import com.emptycastle.novery.ui.screens.details.components.SourcesSection
 import com.emptycastle.novery.ui.screens.details.components.StatsRow
 import com.emptycastle.novery.ui.screens.details.components.StatusBottomSheet
 import com.emptycastle.novery.ui.screens.details.components.SynopsisSection
@@ -154,7 +155,9 @@ fun DetailsScreen(
                 onNovelClick(duplicate.novel.url, duplicate.novel.apiName)
             },
             onAddAnyway = { viewModel.addDuplicateAnyway() },
-            onDismiss = { viewModel.dismissDuplicateWarning() }
+            onDismiss = { viewModel.dismissDuplicateWarning() },
+            // Slice-04.2: attach as an alternate source instead of a new row.
+            onAttachAlternate = true
         )
     }
 
@@ -648,9 +651,22 @@ private fun DetailsContent(
             )
         }
 
+        // Slice-04.2: alternate sources hub (visible with 2+ projections).
+        if (uiState.workProjections.size > 1) {
+            item(key = "sources") {
+                SourcesSection(
+                    projections = uiState.workProjections,
+                    defaultUrl = uiState.workDefaultUrl,
+                    currentUrl = novelUrl,
+                    onOpen = { url, provider -> onNovelClick(url, provider) },
+                    onSwitch = { viewModel.switchProjectionSource(it) },
+                    onDetach = { viewModel.detachProjectionSource(it) }
+                )
+            }
+        }
+
         // Stats row
-        item(key = "stats") {
-            StatsRow(
+        item(key = "stats") {            StatsRow(
                 chapterCount = details.chapters.size,
                 readCount = uiState.readChapters.size,
                 downloadedCount = uiState.downloadedCount,

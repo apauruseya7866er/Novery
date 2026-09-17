@@ -7,6 +7,8 @@ import com.emptycastle.novery.data.local.dao.WorkDao
 import com.emptycastle.novery.data.local.entity.LibraryEntity
 import com.emptycastle.novery.data.local.entity.NovelDetailsEntity
 import com.emptycastle.novery.data.local.entity.OfflineNovelEntity
+import com.emptycastle.novery.data.local.entity.WorkEntity
+import com.emptycastle.novery.data.local.entity.WorkProjectionEntity
 import com.emptycastle.novery.domain.model.Chapter
 import com.emptycastle.novery.domain.model.LibraryFilter
 import com.emptycastle.novery.domain.model.Novel
@@ -255,13 +257,17 @@ class LibraryRepository(
         if (targetTitle.isBlank()) return@withContext emptyList()
 
         // Compare normalized titles so source labels or bracketed suffixes don't hide likely duplicates.
-        libraryDao.getAll()
+        val entities = libraryDao.getAll()
             .asSequence()
             .filter { it.url != novel.url }
             .filter { normalizeDuplicateTitle(it.name) == targetTitle }
             .take(MAX_DUPLICATE_CANDIDATES)
-            .map { it.toLibraryItem() }
             .toList()
+        // Slice-04.2: attach work identity so callers can offer attach/merge.
+        val workIds = workDao?.getAllProjections()
+            ?.associate { it.novelUrl to it.workId }
+            ?: emptyMap()
+        entities.map { it.toLibraryItem(workId = workIds[it.url]) }
     }
 
     // ================================================================
@@ -274,6 +280,7 @@ class LibraryRepository(
     ) = withContext(Dispatchers.IO) {
         val entity = LibraryEntity.fromNovel(novel, status)
         libraryDao.insert(entity)
+        ensureWorkFor(novel.url, novel.apiName)
     }
 
     suspend fun addToLibraryWithDetails(
@@ -288,6 +295,7 @@ class LibraryRepository(
             lastCheckedAt = System.currentTimeMillis()
         )
         libraryDao.insert(entity)
+        ensureWorkFor(novel.url, novel.apiName)
 
         offlineDao.saveNovelDetails(NovelDetailsEntity.fromNovelDetails(details))
         offlineDao.saveNovel(
@@ -297,6 +305,32 @@ class LibraryRepository(
                 coverUrl = novel.posterUrl
             )
         )
+    }
+
+    /**
+     * Slice-04.2: guarantees a work + default projection for a library row.
+     * Idempotent; failures never break the add path.
+     * @return work id, or -1 when the work store is unavailable.
+     */
+    suspend fun ensureWorkFor(novelUrl: String, providerName: String): Long {
+        return try {
+            val dao = workDao ?: return -1
+            dao.getProjectionByUrl(novelUrl)?.workId ?: run {
+                val id = dao.insertWork(
+                    WorkEntity(defaultNovelUrl = novelUrl)
+                )
+                dao.insertProjection(
+                    WorkProjectionEntity(
+                        workId = id,
+                        novelUrl = novelUrl,
+                        providerName = providerName
+                    )
+                )
+                id
+            }
+        } catch (e: Exception) {
+            -1
+        }
     }
 
     suspend fun removeFromLibrary(url: String) = withContext(Dispatchers.IO) {
@@ -310,6 +344,7 @@ class LibraryRepository(
             false
         } else {
             libraryDao.insert(LibraryEntity.fromNovel(novel))
+            ensureWorkFor(novel.url, novel.apiName)
             true
         }
     }
