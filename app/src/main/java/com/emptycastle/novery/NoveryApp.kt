@@ -5,11 +5,14 @@ import com.emptycastle.novery.data.local.NovelDatabase
 import com.emptycastle.novery.data.local.PreferencesManager
 import com.emptycastle.novery.data.remote.CloudflareManager
 import com.emptycastle.novery.data.repository.RepositoryProvider
+import com.emptycastle.novery.data.update.LibraryUpdateScheduler
 import com.emptycastle.novery.provider.AllNovelProvider
 import com.emptycastle.novery.provider.FreeWebNovelProvider
 import com.emptycastle.novery.provider.LibReadProvider
 import com.emptycastle.novery.provider.LnoriProvider
 import com.emptycastle.novery.provider.MainProvider
+import com.emptycastle.novery.provider.NovelArchiveProvider
+import com.emptycastle.novery.provider.NovelArrowProvider
 import com.emptycastle.novery.provider.NovelBinProvider
 import com.emptycastle.novery.provider.NovelFireProvider
 import com.emptycastle.novery.provider.NovelsOnlineProvider
@@ -58,6 +61,16 @@ class NoveryApp : Application() {
 
         // Create notification channels
         NotificationHelper.createNotificationChannels(this)
+
+        // Slice-01: apply saved scheduled-library-update state (default OFF).
+        val updatePrefs = RepositoryProvider.getPreferencesManager()
+        LibraryUpdateScheduler.apply(
+            this,
+            updatePrefs.libraryUpdateEnabled.value,
+            updatePrefs.libraryUpdateIntervalHours.value,
+            updatePrefs.libraryUpdateWifiOnly.value,
+            updatePrefs.libraryUpdateRequireCharging.value
+        )
     }
 
     override fun onTerminate() {
@@ -77,6 +90,8 @@ class NoveryApp : Application() {
         MainProvider.register(WebnovelProvider())
         MainProvider.register(FreeWebNovelProvider())
         MainProvider.register(AllNovelProvider())
+        MainProvider.register(NovelArrowProvider())
+        MainProvider.register(NovelArchiveProvider())
         //MainProvider.register(EmpireNovelProvider())
     }
 }

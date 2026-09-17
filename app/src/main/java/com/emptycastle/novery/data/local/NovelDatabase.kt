@@ -19,6 +19,7 @@ import com.emptycastle.novery.data.local.dao.NetworkBudgetDao
 import com.emptycastle.novery.data.local.dao.OfflineDao
 import com.emptycastle.novery.data.local.dao.RecommendationDao
 import com.emptycastle.novery.data.local.dao.StatsDao
+import com.emptycastle.novery.data.local.dao.UpdateHistoryDao
 import com.emptycastle.novery.data.local.dao.UserFilterDao
 import com.emptycastle.novery.data.local.entity.AuthorPreferenceEntity
 import com.emptycastle.novery.data.local.entity.BlockedAuthorEntity
@@ -36,6 +37,7 @@ import com.emptycastle.novery.data.local.entity.OfflineNovelEntity
 import com.emptycastle.novery.data.local.entity.ReadChapterEntity
 import com.emptycastle.novery.data.local.entity.ReadingStatsEntity
 import com.emptycastle.novery.data.local.entity.ReadingStreakEntity
+import com.emptycastle.novery.data.local.entity.UpdateDetectionEntity
 import com.emptycastle.novery.data.local.entity.UserPreferenceEntity
 import com.emptycastle.novery.data.local.entity.UserTagFilterEntity
 import com.google.gson.Gson
@@ -95,8 +97,9 @@ class DatabaseConverters {
         HiddenNovelEntity::class,
         BlockedAuthorEntity::class,
         AuthorPreferenceEntity::class,
+        UpdateDetectionEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -114,6 +117,7 @@ abstract class NovelDatabase : RoomDatabase() {
     abstract fun networkBudgetDao(): NetworkBudgetDao
     abstract fun userFilterDao(): UserFilterDao
     abstract fun authorPreferenceDao(): AuthorPreferenceDao
+    abstract fun updateHistoryDao(): UpdateHistoryDao
 
     companion object {
         @Volatile
@@ -135,7 +139,8 @@ abstract class NovelDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                         MIGRATION_8_9,
-                        MIGRATION_9_10
+                        MIGRATION_9_10,
+                        MIGRATION_10_11
                     )
                     .fallbackToDestructiveMigration()
                     .build()
@@ -430,6 +435,29 @@ abstract class NovelDatabase : RoomDatabase() {
 
                 // Add customCoverUrl to history table (reading history)
                 safeAddColumn(database, "history", "customCoverUrl", "TEXT")
+            }
+        }
+
+        /**
+         * Migration 10 -> 11
+         * Adds the update_detections table for slice-01.4 new-chapter
+         * detection history (feeds the update-interval predictor).
+         * Fresh installs create it via the entity definition; existing
+         * installs get it here. IF NOT EXISTS + fallback destructive
+         * migration keep this safe either way.
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS update_detections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        novelUrl TEXT NOT NULL,
+                        detectedAt INTEGER NOT NULL,
+                        newChapters INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_update_detections_novelUrl ON update_detections(novelUrl)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_update_detections_detectedAt ON update_detections(detectedAt)")
             }
         }
 

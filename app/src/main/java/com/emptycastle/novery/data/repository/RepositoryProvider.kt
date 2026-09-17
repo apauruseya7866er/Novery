@@ -10,6 +10,7 @@ import com.emptycastle.novery.recommendation.RecommendationEngine
 import com.emptycastle.novery.recommendation.TagEnhancementManager
 import com.emptycastle.novery.recommendation.UserFilterManager
 import com.emptycastle.novery.recommendation.UserPreferenceManager
+import com.emptycastle.novery.util.TextFilterManager
 
 /**
  * Provides singleton instances of repositories
@@ -70,7 +71,8 @@ object RepositoryProvider {
     fun getLibraryRepository(): LibraryRepository {
         return libraryRepository ?: LibraryRepository(
             libraryDao = getDatabase().libraryDao(),
-            offlineDao = getDatabase().offlineDao()
+            offlineDao = getDatabase().offlineDao(),
+            updateHistoryDao = getDatabase().updateHistoryDao()
         ).also { libraryRepository = it }
     }
 
@@ -114,6 +116,14 @@ object RepositoryProvider {
         return userFilterManager ?: UserFilterManager(
             filterDao = getDatabase().userFilterDao()
         ).also { userFilterManager = it }
+    }
+
+    private var textFilterManager: TextFilterManager? = null
+
+    fun getTextFilterManager(): TextFilterManager {
+        return textFilterManager ?: TextFilterManager(
+            getPreferencesManager()
+        ).also { textFilterManager = it }
     }
 
     fun getRecommendationEngine(): RecommendationEngine {
