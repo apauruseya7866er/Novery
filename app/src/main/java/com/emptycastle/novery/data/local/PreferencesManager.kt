@@ -83,6 +83,14 @@ class PreferencesManager(context: Context) {
         MutableStateFlow(prefs.getLong(KEY_LIBRARY_UPDATE_INTERVAL_HOURS, 24L))
     val libraryUpdateIntervalHours: StateFlow<Long> = _libraryUpdateIntervalHours.asStateFlow()
 
+    private val _libraryUpdateWifiOnly =
+        MutableStateFlow(prefs.getBoolean(KEY_LIBRARY_UPDATE_WIFI_ONLY, true))
+    val libraryUpdateWifiOnly: StateFlow<Boolean> = _libraryUpdateWifiOnly.asStateFlow()
+
+    private val _libraryUpdateRequireCharging =
+        MutableStateFlow(prefs.getBoolean(KEY_LIBRARY_UPDATE_REQUIRE_CHARGING, false))
+    val libraryUpdateRequireCharging: StateFlow<Boolean> = _libraryUpdateRequireCharging.asStateFlow()
+
     // Session-only privacy state for the hidden spicy shelf.
     private val _isSpicyShelfRevealed = MutableStateFlow(false)
     val isSpicyShelfRevealed: StateFlow<Boolean> = _isSpicyShelfRevealed.asStateFlow()
@@ -577,14 +585,28 @@ class PreferencesManager(context: Context) {
         _libraryUpdateIntervalHours.value = clamped
     }
 
+    fun setLibraryUpdateWifiOnly(wifiOnly: Boolean) {
+        prefs.edit().putBoolean(KEY_LIBRARY_UPDATE_WIFI_ONLY, wifiOnly).apply()
+        _libraryUpdateWifiOnly.value = wifiOnly
+    }
+
+    fun setLibraryUpdateRequireCharging(requireCharging: Boolean) {
+        prefs.edit().putBoolean(KEY_LIBRARY_UPDATE_REQUIRE_CHARGING, requireCharging).apply()
+        _libraryUpdateRequireCharging.value = requireCharging
+    }
+
     private fun resetLibraryUpdateSettings() {
         prefs.edit().apply {
             putBoolean(KEY_LIBRARY_UPDATE_ENABLED, false)
             putLong(KEY_LIBRARY_UPDATE_INTERVAL_HOURS, 24L)
+            putBoolean(KEY_LIBRARY_UPDATE_WIFI_ONLY, true)
+            putBoolean(KEY_LIBRARY_UPDATE_REQUIRE_CHARGING, false)
             apply()
         }
         _libraryUpdateEnabled.value = false
         _libraryUpdateIntervalHours.value = 24L
+        _libraryUpdateWifiOnly.value = true
+        _libraryUpdateRequireCharging.value = false
     }
 
     fun setSpicyShelfRevealed(revealed: Boolean) {
@@ -1791,6 +1813,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_AUTO_DOWNLOAD_STATUSES = "auto_download_statuses"
         private const val KEY_LIBRARY_UPDATE_ENABLED = "library_update_enabled"
         private const val KEY_LIBRARY_UPDATE_INTERVAL_HOURS = "library_update_interval_hours"
+        private const val KEY_LIBRARY_UPDATE_WIFI_ONLY = "library_update_wifi_only"
+        private const val KEY_LIBRARY_UPDATE_REQUIRE_CHARGING = "library_update_require_charging"
 
         // =====================================================================
         // APP SETTINGS KEYS

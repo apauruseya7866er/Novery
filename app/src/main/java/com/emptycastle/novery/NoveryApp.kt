@@ -67,7 +67,9 @@ class NoveryApp : Application() {
         LibraryUpdateScheduler.apply(
             this,
             updatePrefs.libraryUpdateEnabled.value,
-            updatePrefs.libraryUpdateIntervalHours.value
+            updatePrefs.libraryUpdateIntervalHours.value,
+            updatePrefs.libraryUpdateWifiOnly.value,
+            updatePrefs.libraryUpdateRequireCharging.value
         )
     }
 

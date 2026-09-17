@@ -40,7 +40,13 @@ object LibraryUpdateScheduler {
      * Applies the desired state: schedules (or re-schedules) when enabled,
      * cancels otherwise. Safe to call on every app start.
      */
-    fun apply(context: Context, enabled: Boolean, intervalHours: Long) {
+    fun apply(
+        context: Context,
+        enabled: Boolean,
+        intervalHours: Long,
+        wifiOnly: Boolean = true,
+        requireCharging: Boolean = false
+    ) {
         val workManager = WorkManager.getInstance(context.applicationContext)
         if (!enabled) {
             workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
@@ -51,15 +57,11 @@ object LibraryUpdateScheduler {
             SUPPORTED_INTERVALS_HOURS.min(),
             SUPPORTED_INTERVALS_HOURS.max()
         )
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.UNMETERED)
-            .setRequiresBatteryNotLow(true)
-            .build()
         val request = PeriodicWorkRequestBuilder<LibraryUpdateWorker>(
             interval, TimeUnit.HOURS,
             15, TimeUnit.MINUTES
         )
-            .setConstraints(constraints)
+            .setConstraints(buildConstraints(wifiOnly, requireCharging))
             .addTag(WORK_TAG)
             .setInputData(workDataOf(LibraryUpdateWorker.KEY_ENABLED_SNAPSHOT to true))
             .build()
@@ -68,7 +70,18 @@ object LibraryUpdateScheduler {
             ExistingPeriodicWorkPolicy.UPDATE,
             request
         )
-        Log.i(TAG, "Library updates scheduled every ${interval}h")
+        Log.i(TAG, "Library updates scheduled every ${interval}h (wifiOnly=$wifiOnly, charging=$requireCharging)")
+    }
+
+    /**
+     * Pure mapping from user prefs to WorkManager constraints — unit-tested.
+     */
+    fun buildConstraints(wifiOnly: Boolean, requireCharging: Boolean): Constraints {
+        return Constraints.Builder()
+            .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .setRequiresCharging(requireCharging)
+            .setRequiresBatteryNotLow(true)
+            .build()
     }
 
     /** Synchronous snapshot for verification/debugging (tests, logcat). */

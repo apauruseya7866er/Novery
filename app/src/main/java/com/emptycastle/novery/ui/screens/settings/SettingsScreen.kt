@@ -149,6 +149,8 @@ fun SettingsScreen(
     val settings by preferencesManager.appSettings.collectAsStateWithLifecycle()
     val libraryUpdateEnabled by preferencesManager.libraryUpdateEnabled.collectAsStateWithLifecycle()
     val libraryUpdateIntervalHours by preferencesManager.libraryUpdateIntervalHours.collectAsStateWithLifecycle()
+    val libraryUpdateWifiOnly by preferencesManager.libraryUpdateWifiOnly.collectAsStateWithLifecycle()
+    val libraryUpdateRequireCharging by preferencesManager.libraryUpdateRequireCharging.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     var showResetDialog by remember { mutableStateOf(false) }
@@ -452,7 +454,10 @@ fun SettingsScreen(
                         highlight = true,
                         onCheckedChange = {
                             preferencesManager.setLibraryUpdateEnabled(it)
-                            LibraryUpdateScheduler.apply(context, it, libraryUpdateIntervalHours)
+                            LibraryUpdateScheduler.apply(
+                                context, it, libraryUpdateIntervalHours,
+                                libraryUpdateWifiOnly, libraryUpdateRequireCharging
+                            )
                         }
                     )
 
@@ -473,7 +478,38 @@ fun SettingsScreen(
                                 onSelect = {
                                     val hours = intervals[it]
                                     preferencesManager.setLibraryUpdateIntervalHours(hours)
-                                    LibraryUpdateScheduler.apply(context, true, hours)
+                                    LibraryUpdateScheduler.apply(
+                                        context, true, hours,
+                                        libraryUpdateWifiOnly, libraryUpdateRequireCharging
+                                    )
+                                }
+                            )
+                            SettingsDivider()
+                            ToggleItem(
+                                icon = Icons.Outlined.Wifi,
+                                title = "WiFi Only",
+                                subtitle = "Only check on unmetered connections",
+                                checked = libraryUpdateWifiOnly,
+                                onCheckedChange = {
+                                    preferencesManager.setLibraryUpdateWifiOnly(it)
+                                    LibraryUpdateScheduler.apply(
+                                        context, true, libraryUpdateIntervalHours,
+                                        it, libraryUpdateRequireCharging
+                                    )
+                                }
+                            )
+                            SettingsDivider()
+                            ToggleItem(
+                                icon = Icons.Outlined.DarkMode,
+                                title = "Require Charging",
+                                subtitle = "Only check while the device is charging",
+                                checked = libraryUpdateRequireCharging,
+                                onCheckedChange = {
+                                    preferencesManager.setLibraryUpdateRequireCharging(it)
+                                    LibraryUpdateScheduler.apply(
+                                        context, true, libraryUpdateIntervalHours,
+                                        libraryUpdateWifiOnly, it
+                                    )
                                 }
                             )
                         }
