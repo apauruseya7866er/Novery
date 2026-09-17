@@ -2,6 +2,7 @@ package com.emptycastle.novery.data.repository
 
 import com.emptycastle.novery.data.local.dao.LibraryDao
 import com.emptycastle.novery.data.local.dao.OfflineDao
+import com.emptycastle.novery.data.local.dao.UpdateHistoryDao
 import com.emptycastle.novery.data.local.entity.LibraryEntity
 import com.emptycastle.novery.data.local.entity.NovelDetailsEntity
 import com.emptycastle.novery.data.local.entity.OfflineNovelEntity
@@ -11,8 +12,10 @@ import com.emptycastle.novery.domain.model.Novel
 import com.emptycastle.novery.domain.model.NovelDetails
 import com.emptycastle.novery.domain.model.ReadingStatus
 import com.emptycastle.novery.provider.MainProvider
+import com.emptycastle.novery.data.update.UpdatePredictor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -44,7 +47,10 @@ data class LibraryItem(
     val unreadChapterCount: Int = 0,
     val hasNewChapters: Boolean = false,
     val lastCheckedAt: Long = 0,
-    val isSpicy: Boolean = false
+    val isSpicy: Boolean = false,
+
+    // Slice-01.4: predicted next-update epoch millis (null = not enough data)
+    val nextExpectedUpdateAt: Long? = null
 )
 
 /**
@@ -63,7 +69,8 @@ data class LibraryRefreshResult(
  */
 class LibraryRepository(
     private val libraryDao: LibraryDao,
-    private val offlineDao: OfflineDao
+    private val offlineDao: OfflineDao,
+    private val updateHistoryDao: UpdateHistoryDao? = null
 ) {
 
     // ================================================================
@@ -71,9 +78,18 @@ class LibraryRepository(
     // ================================================================
 
     fun observeLibrary(): Flow<List<LibraryItem>> {
-        return libraryDao.getAllFlow().map { entities ->
+        val entitiesFlow = libraryDao.getAllFlow()
+        val historyDao = updateHistoryDao
+            ?: return entitiesFlow.map { entities ->
+                entities.map { entity -> entity.toLibraryItem() }
+            }
+        return combine(
+            entitiesFlow,
+            historyDao.observeAllRecent()
+        ) { entities, detections ->
+            val predictions = predictionsFor(detections.map { it.novelUrl to it.detectedAt })
             entities.map { entity ->
-                entity.toLibraryItem()
+                entity.toLibraryItem(nextExpectedUpdateAt = predictions[entity.url])
             }
         }
     }
@@ -113,11 +129,33 @@ class LibraryRepository(
     suspend fun getLibrary(): List<LibraryItem> = withContext(Dispatchers.IO) {
         val entities = libraryDao.getAll()
         val downloadCounts = getDownloadCounts()
+        val predictions = predictionsFor(
+            updateHistoryDao?.getAllRecent()?.map { it.novelUrl to it.detectedAt }
+                ?: emptyList()
+        )
 
         entities.map { entity ->
             entity.toLibraryItem(
-                downloadCount = downloadCounts[entity.url] ?: 0
+                downloadCount = downloadCounts[entity.url] ?: 0,
+                nextExpectedUpdateAt = predictions[entity.url]
             )
+        }
+    }
+
+    /**
+     * Slice-01.4: group detection timestamps per novel and predict the next
+     * update. Shared by the suspend and Flow paths.
+     */
+    private fun predictionsFor(
+        detections: List<Pair<String, Long>>,
+        now: Long = System.currentTimeMillis()
+    ): Map<String, Long?> {
+        if (detections.isEmpty()) return emptyMap()
+        return detections.groupBy(
+            keySelector = { it.first },
+            valueTransform = { it.second }
+        ).mapValues { (_, times) ->
+            UpdatePredictor.predictNextUpdate(times, now)
         }
     }
 
@@ -540,7 +578,8 @@ class LibraryRepository(
     // ================================================================
 
     private fun LibraryEntity.toLibraryItem(
-        downloadCount: Int = 0
+        downloadCount: Int = 0,
+        nextExpectedUpdateAt: Long? = null
     ): LibraryItem {
         return LibraryItem(
             novel = toNovel(),
@@ -561,7 +600,8 @@ class LibraryRepository(
             unreadChapterCount = unreadChapterCount,
             hasNewChapters = hasNewChapters,
             lastCheckedAt = lastCheckedAt,
-            isSpicy = getStatus() == ReadingStatus.SPICY
+            isSpicy = getStatus() == ReadingStatus.SPICY,
+            nextExpectedUpdateAt = nextExpectedUpdateAt
         )
     }
 

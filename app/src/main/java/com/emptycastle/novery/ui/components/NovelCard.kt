@@ -143,12 +143,15 @@ fun NovelCard(
     lastReadChapter: String? = null,
     showApiName: Boolean = false,
     isSelected: Boolean = false,
-    isInLibrary: Boolean = false
+    isInLibrary: Boolean = false,
+    // Slice-01.4: update expected soon (update-interval prediction).
+    expectedSoon: Boolean = false
 ) {
     val semanticsLabel = buildString {
         append(novel.name)
         readingStatus?.let { append(", ${it.displayName()}") }
         if (newChapterCount > 0) append(", $newChapterCount new chapters")
+        if (expectedSoon) append(", update expected soon")
         if (isInLibrary) append(", in library")
         lastReadChapter?.let { append(", last read: $it") }
     }
@@ -167,7 +170,8 @@ fun NovelCard(
             lastReadChapter = lastReadChapter,
             showApiName = showApiName,
             isSelected = isSelected,
-            isInLibrary = isInLibrary
+            isInLibrary = isInLibrary,
+            expectedSoon = expectedSoon
         )
         else -> CompactNovelCard(
             novel = novel,
@@ -183,7 +187,8 @@ fun NovelCard(
             showApiName = showApiName,
             isCompact = density == UiDensity.COMPACT,
             isSelected = isSelected,
-            isInLibrary = isInLibrary
+            isInLibrary = isInLibrary,
+            expectedSoon = expectedSoon
         )
     }
 }
@@ -204,7 +209,8 @@ private fun ComfortableNovelCard(
     lastReadChapter: String?,
     showApiName: Boolean,
     isSelected: Boolean,
-    isInLibrary: Boolean
+    isInLibrary: Boolean,
+    expectedSoon: Boolean = false
 ) {
     val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -279,6 +285,7 @@ private fun ComfortableNovelCard(
                     readingStatus = readingStatus,
                     newChapterCount = newChapterCount,
                     isInLibrary = isInLibrary,
+                    expectedSoon = expectedSoon,
                     compactMode = false,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -338,7 +345,8 @@ private fun CompactNovelCard(
     showApiName: Boolean,
     isCompact: Boolean,
     isSelected: Boolean,
-    isInLibrary: Boolean
+    isInLibrary: Boolean,
+    expectedSoon: Boolean = false
 ) {
     val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -399,6 +407,7 @@ private fun CompactNovelCard(
                 readingStatus = readingStatus,
                 newChapterCount = newChapterCount,
                 isInLibrary = isInLibrary,
+                expectedSoon = expectedSoon,
                 compactMode = isCompact,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -597,7 +606,8 @@ private fun BadgeRow(
     newChapterCount: Int,
     isInLibrary: Boolean,
     compactMode: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    expectedSoon: Boolean = false
 ) {
     Row(
         modifier = modifier,
@@ -646,6 +656,17 @@ private fun BadgeRow(
                     count = newChapterCount,
                     compactMode = compactMode
                 )
+            }
+
+            AnimatedVisibility(
+                visible = expectedSoon && newChapterCount == 0,
+                enter = fadeIn() + scaleIn(
+                    initialScale = 0.5f,
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                ),
+                exit = fadeOut() + scaleOut()
+            ) {
+                ExpectedBadge(compactMode = compactMode)
             }
         }
     }
@@ -782,6 +803,34 @@ private fun NewChaptersBadge(
                 textAlign = TextAlign.Center
             )
         }
+    }
+}
+
+// Slice-01.4: "update expected soon" pill from the update-interval predictor.
+@Composable
+private fun ExpectedBadge(
+    modifier: Modifier = Modifier,
+    compactMode: Boolean = false
+) {
+    Surface(
+        modifier = modifier,
+        shape = NovelCardTokens.PillShape,
+        color = MaterialTheme.colorScheme.tertiary,
+        shadowElevation = NovelCardTokens.Elevation.Badge
+    ) {
+        Text(
+            text = "Expected",
+            modifier = Modifier.padding(
+                horizontal = if (compactMode) 6.dp else 8.dp,
+                vertical = if (compactMode) 4.dp else 5.dp
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onTertiary,
+            fontSize = if (compactMode) 9.sp else 11.sp,
+            maxLines = 1,
+            textAlign = TextAlign.Center
+        )
     }
 }
 

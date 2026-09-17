@@ -111,6 +111,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.emptycastle.novery.data.repository.LibraryItem
+import com.emptycastle.novery.data.update.UpdatePredictor
 import com.emptycastle.novery.domain.model.AppSettings
 import com.emptycastle.novery.domain.model.DisplayMode
 import com.emptycastle.novery.domain.model.LibraryFilter
@@ -730,7 +731,11 @@ private fun LibraryContent(
                         newChapterCount = if (appSettings.showBadges) item.newChapterCount else 0,
                         readingStatus = if (appSettings.showBadges) item.readingStatus else null,
                         lastReadChapter = item.lastReadPosition?.chapterName,
-                        density = appSettings.uiDensity
+                        density = appSettings.uiDensity,
+                        // Slice-01.4: update expected soon (interval prediction).
+                        expectedSoon = if (appSettings.showBadges) {
+                            item.nextExpectedUpdateAt?.let { UpdatePredictor.isExpectedSoon(it) } == true
+                        } else false
                     )
                 }
             }
@@ -785,7 +790,11 @@ private fun LibraryContent(
                         newChapterCount = if (appSettings.showBadges) item.newChapterCount else 0,
                         readingStatus = if (appSettings.showBadges) item.readingStatus else null,
                         lastReadChapter = item.lastReadPosition?.chapterName,
-                        density = appSettings.uiDensity
+                        density = appSettings.uiDensity,
+                        // Slice-01.4: update expected soon (interval prediction).
+                        expectedSoon = if (appSettings.showBadges) {
+                            item.nextExpectedUpdateAt?.let { UpdatePredictor.isExpectedSoon(it) } == true
+                        } else false
                     )
                 }
             }

@@ -149,7 +149,9 @@ fun NovelListItem(
     lastReadChapter: String? = null,
     showApiName: Boolean = false,
     isSelected: Boolean = false,
-    isInLibrary: Boolean = false
+    isInLibrary: Boolean = false,
+    // Slice-01.4: update expected soon (update-interval prediction).
+    expectedSoon: Boolean = false
 ) {
     val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -193,6 +195,7 @@ fun NovelListItem(
         append(novel.name)
         readingStatus?.let { append(", ${it.displayName()}") }
         if (newChapterCount > 0) append(", $newChapterCount new chapters")
+        if (expectedSoon) append(", update expected soon")
         if (isInLibrary) append(", in library")
         lastReadChapter?.let { append(", last read: $it") }
     }
@@ -283,6 +286,12 @@ fun NovelListItem(
                         if (newChapterCount > 0) {
                             ListNewChaptersBadge(
                                 count = newChapterCount,
+                                compact = density == UiDensity.COMPACT
+                            )
+                        }
+
+                        if (expectedSoon && newChapterCount == 0) {
+                            ListExpectedBadge(
                                 compact = density == UiDensity.COMPACT
                             )
                         }
@@ -710,6 +719,29 @@ private fun ListNewChaptersBadge(
                 )
             }
         }
+    }
+}
+
+// Slice-01.4: "update expected soon" pill from the update-interval predictor.
+@Composable
+private fun ListExpectedBadge(
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    Surface(
+        modifier = modifier,
+        shape = if (compact) CircleShape else RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.tertiary,
+        shadowElevation = ListItemTokens.Elevation.Badge
+    ) {
+        Text(
+            text = "Expected",
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onTertiary,
+            fontSize = if (compact) 8.sp else 10.sp
+        )
     }
 }
 

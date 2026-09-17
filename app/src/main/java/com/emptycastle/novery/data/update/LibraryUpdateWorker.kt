@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.emptycastle.novery.data.local.entity.UpdateDetectionEntity
 import com.emptycastle.novery.data.repository.LibraryRefreshResult
 import com.emptycastle.novery.data.repository.RepositoryProvider
 
@@ -57,13 +58,16 @@ class LibraryUpdateWorker(
                     skippedCount = items.size
                 )
             } else {
-                libraryRepository.refreshNovelsByUrls(
+                val beforeCounts = items.associate { it.novel.url to it.newChapterCount }
+                val refresh = libraryRepository.refreshNovelsByUrls(
                     getProvider = { name -> novelRepository.getProvider(name) },
                     novelUrls = eligible.map { it.novel.url }.toSet(),
                     onProgress = { current, total, name ->
                         Log.i(TAG, "LibraryUpdate: [$current/$total] $name")
                     }
                 )
+                recordDetections(beforeCounts)
+                refresh
             }
 
             var notified = 0
@@ -96,6 +100,37 @@ class LibraryUpdateWorker(
         } catch (e: Exception) {
             Log.e(TAG, "LibraryUpdate failed", e)
             if (runAttemptCount < 3) Result.retry() else Result.failure()
+        }
+    }
+
+    /**
+     * Slice-01.4: compare unacknowledged new-chapter counts before/after the
+     * refresh and record a detection event for each novel that gained
+     * chapters. Feeds the update-interval predictor.
+     */
+    private suspend fun recordDetections(beforeCounts: Map<String, Int>) {
+        try {
+            val dao = RepositoryProvider.getDatabase().updateHistoryDao()
+            val after = RepositoryProvider.getLibraryRepository().getLibrary()
+            var recorded = 0
+            for (item in after) {
+                val before = beforeCounts[item.novel.url] ?: 0
+                val gained = (item.newChapterCount - before).coerceAtLeast(0)
+                if (gained > 0) {
+                    dao.insert(
+                        UpdateDetectionEntity(
+                            novelUrl = item.novel.url,
+                            detectedAt = System.currentTimeMillis(),
+                            newChapters = gained
+                        )
+                    )
+                    dao.prune(item.novel.url, keep = 10)
+                    recorded++
+                }
+            }
+            if (recorded > 0) Log.i(TAG, "LibraryUpdate: recorded $recorded detection(s)")
+        } catch (e: Exception) {
+            Log.w(TAG, "LibraryUpdate: detection recording failed", e)
         }
     }
 
